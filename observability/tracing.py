@@ -66,5 +66,22 @@ class TraceRecorder:
             "events": [event.export() for event in trace.events],
         }
 
+    def export_otel_spans(self, request_id: str) -> List[Dict]:
+        trace = self._traces[request_id]
+        spans = []
+        for index, event in enumerate(trace.events):
+            spans.append(
+                {
+                    "trace_id": trace.request_id,
+                    "span_id": f"{index + 1:016x}",
+                    "name": f"{event.category}.{event.name}",
+                    "start_time_unix_nano": int(event.started_at * 1_000_000_000),
+                    "duration_ms": event.duration_ms,
+                    "attributes": redact_sensitive(event.metadata),
+                    "status": {"code": "ERROR" if event.error else "OK", "message": event.error or ""},
+                }
+            )
+        return spans
+
 
 trace_recorder = TraceRecorder()

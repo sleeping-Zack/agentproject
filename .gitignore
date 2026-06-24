@@ -25,6 +25,7 @@ agent/chroma_db/
 rag/chroma_db/
 storage/chroma/
 storage/md5.text
+storage/*.db
 md5.text
 
 # Build artifacts

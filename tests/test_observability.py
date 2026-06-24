@@ -16,3 +16,17 @@ def test_trace_recorder_exports_tool_span_with_redaction():
     assert exported["events"][0]["name"] == "get_weather"
     assert exported["events"][0]["duration_ms"] >= 0
     assert exported["events"][0]["metadata"]["token"] == "<redacted>"
+
+
+def test_trace_recorder_exports_opentelemetry_style_spans():
+    recorder = TraceRecorder()
+    recorder.start_trace(request_id="req-otel", session_id="session-1")
+
+    with recorder.span("req-otel", "model", "qwen", {"tokens": 12}):
+        pass
+
+    spans = recorder.export_otel_spans("req-otel")
+
+    assert spans[0]["trace_id"] == "req-otel"
+    assert spans[0]["name"] == "model.qwen"
+    assert spans[0]["attributes"]["tokens"] == 12

@@ -43,6 +43,7 @@ include = [
     "agent*",
     "api*",
     "model*",
+    "mcp_adapter*",
     "observability*",
     "rag*",
     "safety*",

@@ -35,9 +35,22 @@ def _apply_agent_env_overrides(config: dict) -> dict:
 
     return config
 
+
+def _apply_rag_env_overrides(config: dict) -> dict:
+    model_provider = os.getenv("AGENT_MODEL_PROVIDER")
+    if model_provider:
+        config["model_provider"] = model_provider
+    chat_model_name = os.getenv("AGENT_CHAT_MODEL_NAME")
+    if chat_model_name:
+        config["chat_model_name"] = chat_model_name
+    embedding_model_name = os.getenv("AGENT_EMBEDDING_MODEL_NAME")
+    if embedding_model_name:
+        config["embedding_model_name"] = embedding_model_name
+    return config
+
 def load_rag_config(config_path: str=get_abs_path("config/rag.yml"), encoding: str="utf-8"):
     with open(config_path, "r", encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+        return _apply_rag_env_overrides(yaml.load(f, Loader=yaml.FullLoader))
 
 
 def load_chroma_config(config_path: str=get_abs_path("config/chroma.yml"), encoding: str="utf-8"):

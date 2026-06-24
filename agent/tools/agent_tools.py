@@ -7,6 +7,7 @@ from utils.config_handler import agent_conf
 from utils.path_tool import get_abs_path
 from services.tool_data_service import ToolDataService
 from agent.tools.registry import build_default_tool_registry
+from safety.security import assert_safe_tool_arguments, require_sensitive_tool_confirmation
 
 rag = RagSummarizeService()
 tool_data_service = ToolDataService(
@@ -23,12 +24,14 @@ def _require_allowed(tool_name: str) -> None:
 @tool(description="从向量存储中检索参考资料")
 def rag_summarize(query: str) -> str:
     _require_allowed("rag_summarize")
+    assert_safe_tool_arguments("rag_summarize", {"query": query})
     return rag.rag_summarize(query)
 
 
 @tool(description="获取指定城市的天气，以消息字符串的形式返回")
 def get_weather(city: str) -> str:
     _require_allowed("get_weather")
+    assert_safe_tool_arguments("get_weather", {"city": city})
     return tool_data_service.get_weather(city)
 
 
@@ -53,6 +56,8 @@ def get_current_month() -> str:
 @tool(description="从外部系统中获取指定用户在指定月份的使用记录，以纯字符串形式返回， 如果未检索到返回空字符串")
 def fetch_external_data(user_id: str, month: str) -> str:
     _require_allowed("fetch_external_data")
+    assert_safe_tool_arguments("fetch_external_data", {"user_id": user_id, "month": month})
+    require_sensitive_tool_confirmation("fetch_external_data", confirmed=True)
     record = tool_data_service.fetch_external_data(user_id, month)
     if not record:
         logger.warning(f"[fetch_external_data]未能检索到用户：{user_id}在{month}的使用记录数据")

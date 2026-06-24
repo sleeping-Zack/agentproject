@@ -9,6 +9,7 @@ from utils.prompt_loader import load_rag_prompts
 from langchain_core.prompts import PromptTemplate
 from model.factory import chat_model
 from rag.rag_utils import format_citations, hybrid_rank
+from safety.security import UnsafeInputError, assert_safe_retrieved_content
 
 
 def print_prompt(prompt):
@@ -43,6 +44,10 @@ class RagSummarizeService(object):
         context = ""
         counter = 0
         for doc in context_docs:
+            try:
+                assert_safe_retrieved_content(doc.page_content)
+            except UnsafeInputError:
+                continue
             counter += 1
             context += f"【参考资料{counter}】: 参考资料：{doc.page_content} | 参考元数据：{doc.metadata}\n"
 

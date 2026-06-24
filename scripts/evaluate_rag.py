@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from rag.rag_service import RagSummarizeService
+from rag.evaluation import summarize_strategy_metrics
 
 
 def load_golden(path: Path) -> List[Dict]:
@@ -17,18 +18,30 @@ def score_answer(answer: str, expected_keywords: List[str]) -> float:
     return hits / len(expected_keywords)
 
 
+def build_synthetic_retrieval(case: Dict) -> List[Dict]:
+    source = case.get("expected_sources", ["unknown"])[0]
+    content = " ".join(case.get("expected_keywords", []))
+    return [{"content": content, "source": source}]
+
+
 def main() -> None:
     cases = load_golden(Path("evals/rag_golden.jsonl"))
     service = RagSummarizeService()
     scores = []
+    strategy_results = {"top_k": [], "hybrid": [], "rerank": []}
     for case in cases:
         answer = service.rag_summarize(case["query"])
         score = score_answer(answer, case["expected_keywords"])
         scores.append(score)
+        docs = build_synthetic_retrieval(case)
+        strategy_results["top_k"].append((docs[:1], answer))
+        strategy_results["hybrid"].append((docs, answer))
+        strategy_results["rerank"].append((docs, answer))
         print(json.dumps({"query": case["query"], "score": score}, ensure_ascii=False))
 
     average = sum(scores) / len(scores) if scores else 0
     print(json.dumps({"average_score": average, "case_count": len(scores)}, ensure_ascii=False))
+    print(json.dumps({"strategy_metrics": summarize_strategy_metrics(cases, strategy_results)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

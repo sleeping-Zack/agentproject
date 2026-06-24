@@ -5,8 +5,8 @@ from typing import Optional
 from langchain_core.embeddings import Embeddings
 from langchain_community.chat_models.tongyi import BaseChatModel
 from langchain_community.embeddings import DashScopeEmbeddings
-from langchain_community.chat_models.tongyi import ChatTongyi
 from utils.config_handler import rag_conf
+from model.providers import ProviderConfig, build_model_provider
 
 
 class BaseModelFactory(ABC):
@@ -17,7 +17,13 @@ class BaseModelFactory(ABC):
 
 class ChatModelFactory(BaseModelFactory):
     def generator(self) -> Optional[Embeddings | BaseChatModel]:
-        return ChatTongyi(model=rag_conf["chat_model_name"])
+        provider = build_model_provider(
+            ProviderConfig(
+                provider=rag_conf.get("model_provider", "tongyi"),
+                model_name=rag_conf["chat_model_name"],
+            )
+        )
+        return provider.as_langchain_model()
 
 
 class EmbeddingsFactory(BaseModelFactory):

@@ -11,26 +11,41 @@ from langgraph.types import Command
 from utils.logger_handler import logger
 from utils.config_handler import agent_conf
 from agent.tools.registry import build_default_tool_registry
+from agent.tools.retry import RetryPolicy, run_with_retry
 from observability.tracing import trace_recorder
+from observability.metrics import metrics_registry
 
 
 tool_registry = build_default_tool_registry(agent_conf.get("allowed_tools", []))
+default_retry_policy = RetryPolicy(
+    max_attempts=int(agent_conf.get("tool_retry_max_attempts", 3)),
+    base_delay=float(agent_conf.get("tool_retry_base_delay", 0.2)),
+)
 
 
 @wrap_tool_call
 def monitor_tool(
-        # 请求的数据封装
         request: ToolCallRequest,
-        # 执行的函数本身
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
-) -> ToolMessage | Command:             # 工具执行的监控
-    logger.info(f"[tool monitor]执行工具：{request.tool_call['name']}")
+) -> ToolMessage | Command:
+    tool_name = request.tool_call["name"]
+    logger.info(f"[tool monitor]执行工具：{tool_name}")
     logger.info(f"[tool monitor]传入参数：{request.tool_call['args']}")
 
     try:
-        tool_name = request.tool_call["name"]
         tool_registry.require_allowed(tool_name)
-        request_id = request.runtime.context.get("request_id")
+    except PermissionError as exc:
+        metrics_registry.inc_tool_call(tool_name, status="denied")
+        logger.error(f"工具{tool_name}被拒绝：{exc}")
+        return ToolMessage(
+            content=f"工具调用被拒绝：{exc}",
+            tool_call_id=request.tool_call.get("id", ""),
+            name=tool_name,
+        )
+
+    request_id = request.runtime.context.get("request_id")
+
+    def _invoke():
         if request_id:
             with trace_recorder.span(
                     request_id,
@@ -38,18 +53,35 @@ def monitor_tool(
                     name=tool_name,
                     metadata={"args": request.tool_call["args"]},
             ):
-                result = handler(request)
-        else:
-            result = handler(request)
-        logger.info(f"[tool monitor]工具{request.tool_call['name']}调用成功")
+                return handler(request)
+        return handler(request)
 
-        if request.tool_call['name'] == "fill_context_for_report":
+    def _on_retry(attempt: int, exc: BaseException, wait: float) -> None:
+        metrics_registry.inc_tool_call(tool_name, status="retry")
+        logger.warning(
+            f"[tool monitor]工具{tool_name}第{attempt}次调用失败：{exc}，{wait:.2f}s 后重试"
+        )
+
+    start = metrics_registry.now()
+    try:
+        result = run_with_retry(_invoke, policy=default_retry_policy, on_retry=_on_retry)
+        metrics_registry.inc_tool_call(tool_name, status="success")
+        metrics_registry.observe_tool_latency(tool_name, metrics_registry.elapsed_ms(start))
+        logger.info(f"[tool monitor]工具{tool_name}调用成功")
+
+        if tool_name == "fill_context_for_report":
             request.runtime.context["report"] = True
 
         return result
-    except Exception as e:
-        logger.error(f"工具{request.tool_call['name']}调用失败，原因：{str(e)}")
-        raise e
+    except Exception as exc:
+        metrics_registry.inc_tool_call(tool_name, status="failure")
+        metrics_registry.observe_tool_latency(tool_name, metrics_registry.elapsed_ms(start))
+        logger.error(f"工具{tool_name}调用失败，原因：{exc}")
+        return ToolMessage(
+            content=f"工具调用失败：{exc}。请向用户说明无法获取该数据或换一种方式。",
+            tool_call_id=request.tool_call.get("id", ""),
+            name=tool_name,
+        )
 
 
 @before_model

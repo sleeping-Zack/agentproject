@@ -48,6 +48,13 @@ class SQLiteStore:
             ).fetchall()
         return [{"role": role, "content": content} for role, content in rows]
 
+    # ----- SessionStore protocol -----
+    def load_messages(self, session_id: str) -> List[Dict[str, str]]:
+        return self.get_session_messages(session_id)
+
+    def append_message(self, session_id: str, role: str, content: str) -> None:
+        self.save_session_message(session_id, role, content)
+
     def save_trace(self, request_id: str, session_id: str, payload: Dict) -> None:
         with self._connect() as conn:
             conn.execute(

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secrets and local env
+.env
+.env.*
+!.env.example
+
+# Runtime artifacts
+logs/
+chroma_db/
+agent/chroma_db/
+rag/chroma_db/
+storage/chroma/
+storage/md5.text
+md5.text
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

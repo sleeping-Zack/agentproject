@@ -1,0 +1,42 @@
+external_data_path: data/external/records.csv
+default_user_id: "1005"
+default_user_location: 合肥
+current_month: "2025-09"
+trace_enabled: true
+allowed_tools:
+  - rag_summarize
+  - get_weather
+  - get_user_location
+  - get_user_id
+  - get_current_month
+  - fetch_external_data
+  - fill_context_for_report
+default_weather:
+  condition: 晴天
+  temperature_c: 26
+  humidity: 50
+  wind: 南风1级
+  aqi: 21
+  rain_probability: 极低
+weather:
+  深圳:
+    condition: 多云
+    temperature_c: 30
+    humidity: 72
+    wind: 南风2级
+    aqi: 28
+    rain_probability: 低
+  合肥:
+    condition: 晴天
+    temperature_c: 26
+    humidity: 50
+    wind: 南风1级
+    aqi: 21
+    rain_probability: 极低
+  杭州:
+    condition: 小雨
+    temperature_c: 24
+    humidity: 82
+    wind: 东风2级
+    aqi: 35
+    rain_probability: 中等

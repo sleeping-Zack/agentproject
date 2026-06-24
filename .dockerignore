@@ -1,0 +1,15 @@
+.env
+.env.*
+.idea
+__pycache__
+*.pyc
+.pytest_cache
+logs
+chroma_db
+agent/chroma_db
+rag/chroma_db
+storage/chroma
+storage/md5.text
+md5.text
+tests
+docs

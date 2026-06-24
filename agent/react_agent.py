@@ -22,6 +22,7 @@ from agent.tools.agent_tools import (fetch_external_data, fill_context_for_repor
 from agent.tools.middleware import log_before_model, monitor_tool, report_prompt_switch
 from agent.workflows.report_workflow import ReportWorkflow
 from model.factory import chat_model
+from observability.context import bind_request_context
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
 from safety.security import UnsafeInputError, assert_safe_user_input
@@ -98,61 +99,68 @@ class ReactAgent:
         executor.register_handler("generic", handle_generic)
         return PlannerAgent(planner=TaskPlanner(), executor=executor)
 
-    def run_plan(self, query: str, request_id: Optional[str] = None) -> PlanRunResult:
+    def run_plan(self, query: str, request_id: Optional[str] = None,
+                 tenant_id: str = "default") -> PlanRunResult:
         request_id = request_id or str(uuid4())
         trace_recorder.start_trace(request_id=request_id, session_id="planner")
-        try:
-            assert_safe_user_input(query)
-        except UnsafeInputError as exc:
-            return PlanRunResult(plan=[], results=[], answer=f"请求未执行：{exc}")
-        return self.planner_agent.run(query, request_id=request_id)
+        with bind_request_context(request_id=request_id, tenant_id=tenant_id,
+                                  session_id="planner"):
+            try:
+                assert_safe_user_input(query)
+            except UnsafeInputError as exc:
+                return PlanRunResult(plan=[], results=[], answer=f"请求未执行：{exc}")
+            return self.planner_agent.run(query, request_id=request_id)
 
     def execute_stream(self, query: str, session_id: str = "default",
-                       request_id: Optional[str] = None):
+                       request_id: Optional[str] = None,
+                       tenant_id: str = "default"):
         request_id = request_id or str(uuid4())
         trace_recorder.start_trace(request_id=request_id, session_id=session_id)
         request_start = metrics_registry.now()
-        try:
-            assert_safe_user_input(query)
-        except UnsafeInputError as exc:
-            metrics_registry.inc_request(status="rejected")
-            yield f"请求未执行：{str(exc)}\n"
-            return
+        with bind_request_context(request_id=request_id, session_id=session_id,
+                                  tenant_id=tenant_id):
+            try:
+                assert_safe_user_input(query)
+            except UnsafeInputError as exc:
+                metrics_registry.inc_request(status="rejected")
+                yield f"请求未执行：{str(exc)}\n"
+                return
 
-        history = self.memory.get_messages(session_id)
-        input_dict = {"messages": history + [{"role": "user", "content": query}]}
+            history = self.memory.get_messages(session_id, tenant_id=tenant_id)
+            input_dict = {"messages": history + [{"role": "user", "content": query}]}
 
-        latest_response = ""
-        try:
-            with trace_recorder.span(
-                    request_id,
-                    category="agent",
-                    name="execute_stream",
-                    metadata={"query": query, "history_count": len(history)},
-            ):
-                for chunk in self.agent.stream(
-                        input_dict,
-                        stream_mode="values",
-                        context={"report": False, "request_id": request_id,
-                                 "session_id": session_id},
+            latest_response = ""
+            try:
+                with trace_recorder.span(
+                        request_id,
+                        category="agent",
+                        name="execute_stream",
+                        metadata={"query": query, "history_count": len(history)},
                 ):
-                    latest_message = chunk["messages"][-1]
-                    if latest_message.content:
-                        latest_response = latest_message.content.strip() + "\n"
-                        yield latest_response
-        except Exception as exc:
-            metrics_registry.inc_request(status="error")
-            metrics_registry.observe_request_latency(metrics_registry.elapsed_ms(request_start))
-            yield f"Agent 运行失败：{exc}\n"
-            return
+                    for chunk in self.agent.stream(
+                            input_dict,
+                            stream_mode="values",
+                            context={"report": False, "request_id": request_id,
+                                     "session_id": session_id, "tenant_id": tenant_id},
+                    ):
+                        latest_message = chunk["messages"][-1]
+                        if latest_message.content:
+                            latest_response = latest_message.content.strip() + "\n"
+                            yield latest_response
+            except Exception as exc:
+                metrics_registry.inc_request(status="error")
+                metrics_registry.observe_request_latency(metrics_registry.elapsed_ms(request_start))
+                yield f"Agent 运行失败：{exc}\n"
+                return
 
-        if latest_response:
-            self.memory.add_message(session_id, "user", query)
-            self.memory.add_message(session_id, "assistant", latest_response.strip())
-            metrics_registry.inc_request(status="success")
-        else:
-            metrics_registry.inc_request(status="empty")
-        metrics_registry.observe_request_latency(metrics_registry.elapsed_ms(request_start))
+            if latest_response:
+                self.memory.add_message(session_id, "user", query, tenant_id=tenant_id)
+                self.memory.add_message(session_id, "assistant", latest_response.strip(),
+                                        tenant_id=tenant_id)
+                metrics_registry.inc_request(status="success")
+            else:
+                metrics_registry.inc_request(status="empty")
+            metrics_registry.observe_request_latency(metrics_registry.elapsed_ms(request_start))
 
 
 if __name__ == '__main__':

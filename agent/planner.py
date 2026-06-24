@@ -180,6 +180,23 @@ class PlanExecutor:
             results[task.id] = self._run_single(task)
         return [results[t.id] for t in plan]
 
+    async def execute_async(self, plan: List[SubTask]) -> List[SubTaskResult]:
+        """asyncio 版本：独立子任务用 asyncio.gather 并发，比 ThreadPoolExecutor
+        更省内存，且能与 FastAPI 的事件循环统一。"""
+        import asyncio
+        results: Dict[str, SubTaskResult] = {}
+        ready = [t for t in plan if not t.depends_on]
+        remaining = [t for t in plan if t.depends_on]
+        if ready:
+            ready_results = await asyncio.gather(
+                *(asyncio.to_thread(self._run_single, t) for t in ready)
+            )
+            for task, result in zip(ready, ready_results):
+                results[task.id] = result
+        for task in remaining:
+            results[task.id] = await asyncio.to_thread(self._run_single, task)
+        return [results[t.id] for t in plan]
+
 
 class ResultAggregator:
     """Combine sub-task results into a final answer."""

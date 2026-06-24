@@ -87,6 +87,10 @@ class MetricsRegistry:
     def observe_request_latency(self, ms: float) -> None:
         self.observe_histogram("agent_request_latency_ms", ms)
 
+    def observe_ttft(self, ms: float) -> None:
+        """Time-To-First-Token：流式响应首个非空 chunk 的耗时。"""
+        self.observe_histogram("agent_request_ttft_ms", ms)
+
     def inc_tool_call(self, tool: str, status: str) -> None:
         self.inc_counter("agent_tool_call_total", {"tool": tool, "status": status})
 

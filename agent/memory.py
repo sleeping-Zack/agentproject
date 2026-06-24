@@ -65,57 +65,71 @@ class ConversationMemory:
         self._cache[session_id] = history
         return history
 
-    def add_message(self, session_id: str, role: str, content: str) -> None:
-        with self._lock:
-            self.store.append_message(session_id, role, content)
-            cached = self._load_into_cache(session_id)
-            cached.append({"role": role, "content": content})
-            self._maybe_compress(session_id)
+    @staticmethod
+    def _key(session_id: str, tenant_id: str = "default") -> str:
+        return f"{tenant_id}|{session_id}"
 
-    def get_messages(self, session_id: str) -> List[Dict[str, str]]:
+    def add_message(self, session_id: str, role: str, content: str,
+                    tenant_id: str = "default") -> None:
+        key = self._key(session_id, tenant_id)
         with self._lock:
-            cached = self._load_into_cache(session_id)
+            cached = self._load_into_cache(key)
+            self.store.append_message(key, role, content)
+            cached.append({"role": role, "content": content})
+            self._maybe_compress(key)
+
+    def get_messages(self, session_id: str,
+                     tenant_id: str = "default") -> List[Dict[str, str]]:
+        key = self._key(session_id, tenant_id)
+        with self._lock:
+            cached = self._load_into_cache(key)
             window = cached[-self.max_messages :]
-            summary = self._summaries.get(session_id)
+            summary = self._summaries.get(key)
             if summary:
                 return [{"role": "system", "content": f"对话历史摘要：{summary}"}] + deepcopy(window)
             return deepcopy(window)
 
-    def update_profile(self, session_id: str, values: Dict[str, str]) -> None:
+    def update_profile(self, session_id: str, values: Dict[str, str],
+                       tenant_id: str = "default") -> None:
+        key = self._key(session_id, tenant_id)
         with self._lock:
-            self._profiles.setdefault(session_id, {}).update(values)
+            self._profiles.setdefault(key, {}).update(values)
 
-    def set_last_tool_result(self, session_id: str, tool_name: str, result: str) -> None:
+    def set_last_tool_result(self, session_id: str, tool_name: str, result: str,
+                             tenant_id: str = "default") -> None:
+        key = self._key(session_id, tenant_id)
         with self._lock:
-            self._last_tool_results.setdefault(session_id, {})[tool_name] = result
+            self._last_tool_results.setdefault(key, {})[tool_name] = result
 
-    def snapshot(self, session_id: str) -> Dict[str, Dict[str, str]]:
+    def snapshot(self, session_id: str,
+                 tenant_id: str = "default") -> Dict[str, Dict[str, str]]:
+        key = self._key(session_id, tenant_id)
         with self._lock:
             return {
-                "profile": deepcopy(self._profiles.get(session_id, {})),
-                "last_tool_results": deepcopy(self._last_tool_results.get(session_id, {})),
-                "summary": self._summaries.get(session_id, ""),
+                "profile": deepcopy(self._profiles.get(key, {})),
+                "last_tool_results": deepcopy(self._last_tool_results.get(key, {})),
+                "summary": self._summaries.get(key, ""),
             }
 
-    def get_summary(self, session_id: str) -> str:
-        return self._summaries.get(session_id, "")
+    def get_summary(self, session_id: str, tenant_id: str = "default") -> str:
+        return self._summaries.get(self._key(session_id, tenant_id), "")
 
-    def _maybe_compress(self, session_id: str) -> None:
+    def _maybe_compress(self, key: str) -> None:
         if not self.summarizer:
             return
-        cached = self._cache.get(session_id, [])
+        cached = self._cache.get(key, [])
         if len(cached) < self.summary_trigger:
             return
         keep = max(1, self.summary_keep_recent)
         to_compress = cached[:-keep]
         if not to_compress:
             return
-        previous_summary = self._summaries.get(session_id, "")
+        previous_summary = self._summaries.get(key, "")
         try:
             new_summary = self.summarizer(to_compress, previous_summary)
         except Exception:
             return
         if not new_summary:
             return
-        self._summaries[session_id] = new_summary
-        self._cache[session_id] = cached[-keep:]
+        self._summaries[key] = new_summary
+        self._cache[key] = cached[-keep:]

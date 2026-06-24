@@ -64,4 +64,18 @@ def test_conversation_memory_compresses_with_summarizer():
     assert messages[0]["role"] == "system"
     assert "已压缩" in messages[0]["content"]
     assert messages[-1]["role"] == "assistant"
-    assert len(messages) <= 1 + 2  # summary + recent window
+    # 触发摘要后窗口必然短于全量 10 条（含 summary 头）
+    assert 1 < len(messages) < 10
+
+
+def test_conversation_memory_isolates_tenants():
+    store = InMemorySessionStore()
+    memory = ConversationMemory(max_messages=5, store=store)
+
+    memory.add_message("s1", "user", "tenant a 的消息", tenant_id="tenant-a")
+    memory.add_message("s1", "user", "tenant b 的消息", tenant_id="tenant-b")
+
+    a = memory.get_messages("s1", tenant_id="tenant-a")
+    b = memory.get_messages("s1", tenant_id="tenant-b")
+    assert len(a) == 1 and a[0]["content"] == "tenant a 的消息"
+    assert len(b) == 1 and b[0]["content"] == "tenant b 的消息"

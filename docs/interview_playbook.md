@@ -72,3 +72,7 @@ flowchart LR
 ## 后续路线
 
 如果继续做，我会把 SQLite 换成 Postgres，把内存限流换成 Redis，把 Mock/Tongyi provider 扩成 OpenAI-compatible provider，把 RAG rerank 接真实 reranker，并把 trace 接入 Jaeger 或 Tempo。
+
+---
+
+> 📘 **第四轮升级**：多模型路由、熔断降级、结构化日志、Prompt 版本、SSE 增强、多租户、异步化、多级缓存、端到端评测——详见 [`interview_playbook_v4.md`](./interview_playbook_v4.md)。

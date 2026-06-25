@@ -79,31 +79,468 @@ python scripts/benchmark_api.py --url http://127.0.0.1:8000/chat --api-key dev-a
 docker build -t sweeper-agent .
 docker run --env-file .env -p 8000:8000 sweeper-agent
 ```
+---
 
-## 目录
+# 2. 总体架构图
 
-- `agent/`：Agent 封装、工具、中间件、会话记忆。
-- `api/`：FastAPI 服务入口。
-- `rag/`：向量库加载、RAG 总结和评测辅助。
-- `services/`：可替换的数据服务适配器。
-- `safety/`：输入安全和日志脱敏。
-- `observability/`：轻量 trace。
-- `tests/`：单元测试和 Prompt 回归测试。
-- `evals/`：RAG golden set。
-- `mcp_adapter/`：MCP JSON-RPC 适配层。
-- `docs/demo.md`：真实演示命令、curl 示例和 trace 示例。
-- `docs/interview_playbook.md`：面试讲稿，解释三轮改造、架构、核心代码和回答话术。
+```mermaid
+flowchart TB
+    U["用户 / 前端客户端"] --> UI["Streamlit UI<br/>app.py"]
+    U --> API["FastAPI 服务<br/>api/server.py"]
 
-## 作品说明
+    UI --> AG["ReactAgent<br/>agent/react_agent.py"]
+    API --> AUTH["API Key 鉴权 / 租户解析 / 限流"]
+    AUTH --> SEC["安全校验<br/>Prompt Injection 检测"]
+    SEC --> ROUTE{"请求类型判断"}
 
-这个项目不是单纯 Prompt Demo，而是把 Agent 应用开发中常见的工程关注点落成代码：工具权限、MCP 服务、RAG 可评测、显式工作流、会话状态、安全边界、可观测性、API 服务、性能压测和容器化交付。
+    ROUTE -->|普通问答| AG
+    ROUTE -->|报告 / 使用记录| WF["ReportWorkflow<br/>显式报告工作流"]
+    ROUTE -->|计划型任务| PLANNER["PlannerAgent<br/>plan → execute → aggregate"]
 
-## 面试材料
+    AG --> LC["LangChain create_agent<br/>ReAct 工具调用链"]
+    LC --> TOOLS["Agent Tools<br/>工具函数层"]
+    PLANNER --> EXEC["PlanExecutor<br/>并发执行子任务"]
+    EXEC --> TOOLS
+    WF --> DATA["ToolDataService<br/>配置/CSV 数据服务"]
+    WF --> RAG["RagSummarizeService"]
 
-详细讲稿在 `docs/interview_playbook.md`，覆盖：
+    TOOLS --> REG["ToolRegistry<br/>allowlist / manifest / scope"]
+    TOOLS --> RAG
+    TOOLS --> DATA
+    TOOLS --> MID["Tool Middleware<br/>日志 / trace / retry / cache / 熔断"]
 
-- 三轮改造总览
-- 架构图
-- 核心代码讲解
-- MCP、工作流、RAG 评测、安全、可观测、工程质量的面试回答
-- 后续演进路线
+    RAG --> VS["VectorStoreService<br/>Chroma 向量库"]
+    VS --> KB["data/ PDF/TXT 知识库"]
+    RAG --> MODEL["Chat Model<br/>Tongyi / OpenAI-compatible / Mock"]
+    MODEL --> PROVIDER["Provider / ModelRouter<br/>模型路由与降级"]
+
+    AG --> MEM["ConversationMemory<br/>会话记忆"]
+    MEM --> SQLITE["SQLiteStore<br/>session_messages"]
+    API --> TRACE["TraceRecorder<br/>request/tool/model span"]
+    TRACE --> SQLITE2["SQLiteStore<br/>traces"]
+    API --> METRICS["MetricsRegistry<br/>Prometheus 文本指标"]
+
+    API --> MCPHTTP["/mcp HTTP JSON-RPC"]
+    MCPSTDIO["mcp_server.py stdio"] --> MCP["MCPToolServer"]
+    MCPHTTP --> MCP
+    MCP --> REG
+    MCP --> TOOLS
+```
+
+---
+
+# 3. 分层架构说明
+
+## 3.1 表现层：Streamlit + FastAPI
+
+项目有两个入口。
+
+第一个是 `app.py`，用于 Streamlit 演示界面。它在 `st.session_state` 中维护 `ReactAgent`、消息列表和 `session_id`，用户输入后调用 `ReactAgent.execute_stream()` 进行流式回答。
+
+第二个是 `api/server.py`，用于 FastAPI 服务化交付。服务中初始化了 `SQLiteStore`、`ReactAgent`、`RateLimiter` 和 `MCPToolServer`，并暴露 `/health`、`/tools/manifest`、`/chat`、`/chat/stream`、`/plan`、`/judge`、`/traces/{request_id}`、`/mcp` 等接口。
+
+---
+
+## 3.2 接入与控制层：鉴权、限流、租户、安全
+
+FastAPI 的 `/chat` 接口会先做 API Key 鉴权，再解析租户 ID，然后按租户或 IP 维度限流，最后进行用户输入安全检查。
+
+限流器是一个轻量滑动窗口实现，用 `deque` 记录请求时间，超过窗口内最大请求数后拒绝。
+
+安全层主要在 `safety/security.py`，包括用户 Prompt Injection 检测、RAG 检索内容注入检测、工具参数正则校验、敏感工具确认、日志脱敏。
+
+---
+
+# 4. Agent 主链路架构
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant API as FastAPI / Streamlit
+    participant Sec as 安全校验
+    participant Agent as ReactAgent
+    participant Memory as ConversationMemory
+    participant LC as LangChain Agent
+    participant Tool as 工具层
+    participant RAG as RAG服务
+    participant Model as 大模型
+    participant Trace as Trace/Metrics
+
+    User->>API: 输入问题
+    API->>Sec: API Key / 限流 / 注入检测
+    Sec->>Agent: execute_stream(query, session_id, request_id)
+    Agent->>Trace: start_trace + bind_request_context
+    Agent->>Memory: 读取历史对话
+    Agent->>LC: create_agent.stream(messages + query)
+    LC->>Tool: 根据模型决策调用工具
+    Tool->>Trace: tool_start / span / metrics
+    Tool->>RAG: 检索知识库或调用业务数据
+    RAG->>Model: prompt + context 生成答案
+    Model-->>LC: 返回工具结果/回答
+    LC-->>Agent: 流式 chunk
+    Agent->>Memory: 写入用户与助手消息
+    Agent->>Trace: 记录成功/失败/耗时
+    Agent-->>API: 返回最终回答
+    API-->>User: 普通响应或 SSE 流式响应
+```
+
+`ReactAgent` 是 Agent 主入口。它创建 LangChain Agent，加载系统 Prompt，注册工具，并接入中间件。工具包括 RAG 总结、天气、用户位置、用户 ID、当前月份、外部使用记录、报告上下文切换等。
+
+执行时，`ReactAgent.execute_stream()` 会启动 trace，绑定 `request_id/session_id/tenant_id` 上下文，做安全校验，读取会话历史，把历史消息和当前用户问题组成输入，再调用 `self.agent.stream()` 获取模型与工具调用结果。成功后会把本轮用户消息和助手回答写入记忆。
+
+---
+
+# 5. 工具层架构
+
+```mermaid
+flowchart LR
+    Agent["LangChain Agent"] --> Middleware["Tool Middleware"]
+    Middleware --> Allow["ToolRegistry.allowlist 权限检查"]
+    Middleware --> Cache["ToolCallCache 幂等缓存"]
+    Middleware --> Retry["RetryPolicy 重试"]
+    Middleware --> Breaker["CircuitBreaker 熔断"]
+    Middleware --> Trace["TraceRecorder + EventBus"]
+    Middleware --> ToolFns["agent_tools.py 工具函数"]
+
+    ToolFns --> RAG["rag_summarize"]
+    ToolFns --> Weather["get_weather"]
+    ToolFns --> Loc["get_user_location"]
+    ToolFns --> UID["get_user_id"]
+    ToolFns --> Month["get_current_month"]
+    ToolFns --> Record["fetch_external_data"]
+    ToolFns --> ReportCtx["fill_context_for_report"]
+
+    RAG --> RAGService["RagSummarizeService"]
+    Weather --> DataService["ToolDataService"]
+    Loc --> DataService
+    UID --> DataService
+    Month --> DataService
+    Record --> DataService
+```
+
+工具函数集中在 `agent/tools/agent_tools.py`。其中 `rag_summarize` 调用 RAG 服务，`get_weather/get_user_location/get_user_id/get_current_month/fetch_external_data` 调用 `ToolDataService`，并且每个工具入口都会先检查 allowlist 和参数安全。
+
+工具注册表 `ToolRegistry` 记录每个工具的名称、描述、scope 和 input schema，既能做权限控制，也能导出 MCP 风格 manifest。
+
+默认注册的工具包括 `rag_summarize`、`get_weather`、`get_user_location`、`get_user_id`、`get_current_month`、`fetch_external_data` 和 `fill_context_for_report`。
+
+工具中间件负责工具调用的工程控制：先做 allowlist 检查，再接入熔断器、trace span、SSE 事件、缓存、重试、指标统计。如果工具调用成功，会记录工具耗时；如果失败，会返回可被 Agent 继续推理的 `ToolMessage`，避免整条链路直接崩溃。
+
+---
+
+# 6. RAG 知识库架构
+
+```mermaid
+flowchart TB
+    Files["data/ 下 PDF / TXT 文件"] --> Loader["pdf_loader / txt_loader"]
+    Loader --> Splitter["RecursiveCharacterTextSplitter<br/>chunk_size=200 overlap=20"]
+    Splitter --> Meta["补充 metadata<br/>source / chunk_version / chunk_index / doc_id"]
+    Meta --> Chroma["Chroma 向量库<br/>storage/chroma"]
+    Chroma --> Retriever["Retriever k=3"]
+    Retriever --> Hybrid["hybrid_rank<br/>关键词 + 向量结果重排"]
+    Hybrid --> Safety["RAG 注入内容过滤"]
+    Safety --> Prompt["RAG Prompt<br/>input + context"]
+    Prompt --> LLM["Chat Model"]
+    LLM --> Answer["答案 + 引用来源"]
+```
+
+RAG 加载流程由 `VectorStoreService` 实现：读取 `data/` 下允许的 PDF/TXT 文件，计算 MD5 去重，加载文档，切分 chunk，补充 metadata，然后写入 Chroma 向量库。
+
+Chroma 配置中，collection 名为 `agent`，持久化目录是 `storage/chroma`，默认检索 `k=3`，数据目录是 `data`，允许文件类型是 `txt/pdf`，chunk 大小为 200，overlap 为 20。
+
+RAG 问答由 `RagSummarizeService` 实现：先从向量库检索，再经过 `hybrid_rank` 重排，对检索内容做 RAG 注入检测，最后将 query 和 context 填入 RAG prompt 调用模型，并在答案后附加引用来源。
+
+---
+
+# 7. 报告生成工作流架构
+
+```mermaid
+flowchart TB
+    Q["用户请求：生成报告 / 使用记录"] --> Intent["1. 意图识别"]
+    Intent -->|不是报告| Fallback["兜底返回"]
+    Intent -->|是报告| Ctx["2. 获取用户上下文<br/>user_id + current_month"]
+    Ctx --> Record["3. 查询使用记录<br/>ToolDataService.fetch_external_data"]
+    Record -->|无记录| NoRecord["兜底：没有对应月份记录"]
+    Record -->|有记录| RAG["4. RAG 补充保养建议"]
+    RAG --> Gen["5. 生成结构化报告"]
+    Gen --> Ans["返回个人使用报告"]
+```
+
+报告生成不是完全依赖 Prompt，而是由 `ReportWorkflow` 显式编排。流程包括：识别是否为报告意图、加载用户 ID 和月份、查询外部使用记录、RAG 补充保养建议、生成最终报告；如果不是报告意图或查不到记录，会进入 fallback。
+
+具体字段来自 `ToolDataService`，它从配置中读取默认用户 ID、位置、当前月份和天气配置，并从 CSV 中读取外部使用记录。
+
+当前配置中默认用户 ID 是 `1005`，默认位置是合肥，当前月份是 `2025-09`，并允许全部核心工具。
+
+---
+
+# 8. Planner 多任务架构
+
+```mermaid
+flowchart LR
+    UserQuery["复杂用户请求"] --> Planner["TaskPlanner<br/>规则/可替换LLM规划"]
+    Planner --> Tasks["SubTask[]<br/>weather / rag_qa / report / generic"]
+    Tasks --> Executor["PlanExecutor<br/>ThreadPoolExecutor 并发执行"]
+    Executor --> H1["weather handler"]
+    Executor --> H2["rag_qa handler"]
+    Executor --> H3["report handler"]
+    Executor --> H4["generic handler"]
+    H1 --> Results["SubTaskResult[]"]
+    H2 --> Results
+    H3 --> Results
+    H4 --> Results
+    Results --> Aggregator["ResultAggregator<br/>合并多任务结果"]
+    Aggregator --> Final["综合回答"]
+```
+
+`agent/planner.py` 实现了 `plan → execute → aggregate` 模式，用于处理多步骤任务。`TaskPlanner` 会把请求拆成 `weather/rag_qa/report/generic` 等子任务，`PlanExecutor` 可用线程池并发执行无依赖子任务，`ResultAggregator` 再把多个子任务结果合并为最终回答。
+
+在 `ReactAgent` 中，Planner 的 handler 分别对接天气、RAG、报告工作流和默认 Agent 链路。
+
+---
+
+# 9. MCP 架构
+
+```mermaid
+flowchart TB
+    MCPClient["MCP Client"] -->|stdio| Stdio["mcp_server.py"]
+    External["HTTP Client"] -->|POST /mcp| API["FastAPI /mcp"]
+    Stdio --> MCP["MCPToolServer"]
+    API --> MCP
+
+    MCP --> Init["initialize"]
+    MCP --> List["tools/list"]
+    MCP --> Call["tools/call"]
+
+    List --> Registry["ToolRegistry manifest"]
+    Call --> Handlers["tool_handlers"]
+    Handlers --> RAG["rag_summarize"]
+    Handlers --> Weather["get_weather"]
+    Handlers --> Record["fetch_external_data"]
+```
+
+MCP 适配层由 `MCPToolServer` 实现，支持 JSON-RPC 的 `initialize`、`tools/list` 和 `tools/call`。`tools/list` 返回工具 manifest，`tools/call` 根据工具名调用对应 handler。
+
+项目同时支持 stdio MCP 和 HTTP MCP。`mcp_server.py` 从标准输入逐行读取 JSON-RPC 请求，然后输出 JSON-RPC 响应；FastAPI 中的 `/mcp` 端点则直接调用同一套 `MCPToolServer.handle_jsonrpc()`。
+
+---
+
+# 10. 模型层架构
+
+```mermaid
+flowchart TB
+    Business["业务调用"] --> Factory["model/factory.py"]
+    Factory --> ChatModel["chat_model<br/>向后兼容单例"]
+    Factory --> Router["model_router<br/>多模型路由"]
+
+    Router --> Select["按 scene / tenant / weight / breaker 选择"]
+    Select --> Tongyi["TongyiProvider"]
+    Select --> Doubao["DoubaoProvider"]
+    Select --> OpenAI["OpenAICompatibleProvider"]
+    Select --> VLLM["VLLMProvider"]
+    Select --> Mock["MockProvider"]
+
+    Tongyi --> LCModel["LangChain Chat Model"]
+    Doubao --> OpenAIClient["ChatOpenAI compatible"]
+    OpenAI --> OpenAIClient
+    VLLM --> OpenAIClient
+    Mock --> MockModel["离线演示模型"]
+```
+
+模型工厂目前保留 `chat_model` 模块级单例，向后兼容原有代码；同时新增 `model_router`，用于后续按健康度和租户路由模型，实现主模型不可用时自动降级。
+
+Provider 抽象支持 `mock`、`tongyi`、`openai_compatible`、`doubao`、`vllm`。其中豆包和 vLLM 都复用 OpenAI-compatible 接口，只是 base_url 和 API key 环境变量不同。
+
+`ModelRouter` 按 scene、tenant、weight 和 CircuitBreaker 健康度选择 provider；调用失败后记录失败并尝试降级到下一个候选模型。
+
+---
+
+# 11. 会话记忆与持久化架构
+
+```mermaid
+flowchart LR
+    Agent["ReactAgent"] --> Memory["ConversationMemory"]
+    Memory --> Cache["进程内 cache<br/>最近消息窗口"]
+    Memory --> Summary["ConversationSummarizer<br/>长对话摘要"]
+    Memory --> Store["SessionStore 协议"]
+    Store --> SQLite["SQLiteStore"]
+
+    SQLite --> SessionTable["session_messages<br/>tenant_id + session_id + role + content"]
+    SQLite --> TraceTable["traces<br/>request_id + session_id + payload"]
+```
+
+`ConversationMemory` 同时支持进程内缓存和可插拔持久化后端，默认可接 SQLite；它通过 `tenant_id|session_id` 形成多租户会话 key，并在消息超过阈值时可触发摘要压缩。
+
+`SQLiteStore` 创建两张核心表：`session_messages` 保存会话消息，`traces` 保存请求链路追踪 payload，并为 tenant/session 维度建立索引。
+
+---
+
+# 12. 可观测性架构
+
+```mermaid
+flowchart TB
+    Request["一次用户请求"] --> Trace["TraceRecorder"]
+    Trace --> Span1["agent.execute_stream"]
+    Trace --> Span2["model.before_model"]
+    Trace --> Span3["tool.rag_summarize / get_weather / ..."]
+    Trace --> Export1["/traces/{request_id}"]
+    Trace --> Export2["/traces/{request_id}/otel"]
+
+    ToolMiddleware["工具中间件"] --> EventBus["EventBus"]
+    EventBus --> SSE["/chat/stream SSE"]
+    SSE --> Front["前端显示 tool_start/tool_end/answer/done"]
+
+    Runtime["运行过程"] --> Metrics["MetricsRegistry"]
+    Metrics --> Prom["/metrics Prometheus text"]
+    Metrics --> Snap["/metrics/snapshot JSON"]
+```
+
+`TraceRecorder` 能记录 request、agent、tool、model 等 span，每个事件包括 category、name、started_at、duration_ms、metadata 和 error，并能导出 OpenTelemetry 风格 span。
+
+`EventBus` 是请求级事件总线，工具中间件在工具调用前后发布 `tool_start/tool_end`，SSE 端点消费同一个 `request_id` 的事件，从而让前端知道 Agent 正在调用哪个工具。
+
+`MetricsRegistry` 是无外部依赖的内存指标注册器，支持 counter、gauge、histogram，并能导出 Prometheus 文本格式；指标包括请求量、请求延迟、工具调用量、工具延迟、RAG 评测分数和 token 统计。
+
+---
+
+# 13. 缓存、重试、熔断架构
+
+```mermaid
+flowchart LR
+    ToolCall["工具调用"] --> Cache["ToolCallCache<br/>tool + args hash"]
+    Cache -->|命中| Return["直接返回历史 ToolMessage"]
+    Cache -->|未命中| Retry["RetryPolicy"]
+    Retry --> Breaker["CircuitBreaker"]
+    Breaker -->|CLOSED/HALF_OPEN| RealCall["真实工具调用"]
+    Breaker -->|OPEN| Fallback["短路返回兜底 ToolMessage"]
+
+    RAGQuery["RAG Query"] --> Semantic["SemanticCache<br/>embedding 近似命中"]
+    Semantic -->|相似度 >= threshold| CachedAnswer["返回缓存答案"]
+    Semantic -->|未命中| RAGFlow["正常 RAG 检索生成"]
+```
+
+缓存层包括 TTL+LRU 的 `MemoryCache`、基于 embedding 余弦相似度的 `SemanticCache`、以及工具调用幂等缓存 `ToolCallCache`。RAG 服务会在启用 embedding 时使用语义缓存，相似问题可直接返回缓存答案。
+
+熔断器实现了 `CLOSED → OPEN → HALF_OPEN → CLOSED` 三态，用于模型、工具和外部依赖保护。连续失败达到阈值后进入 OPEN，恢复时间后允许半开探测。
+
+---
+
+# 14. 目录结构与职责
+
+| 目录 / 文件            | 职责                                                      |
+| ------------------ | ------------------------------------------------------- |
+| `app.py`           | Streamlit 聊天演示入口                                        |
+| `api/`             | FastAPI 服务入口，提供 chat、stream、MCP、trace、metrics、judge 等接口 |
+| `agent/`           | Agent 主体、会话记忆、Planner、Summarizer、Workflow               |
+| `agent/tools/`     | LangChain 工具、工具注册表、中间件、重试策略                             |
+| `agent/workflows/` | 显式业务工作流，目前核心是个人使用报告生成                                   |
+| `rag/`             | Chroma 向量库、RAG 检索总结、引用、评测辅助                             |
+| `model/`           | 模型工厂、Provider 抽象、多模型路由                                  |
+| `services/`        | 数据服务、SQLite 持久化、缓存、限流、任务队列、熔断器                          |
+| `safety/`          | Prompt 注入检测、RAG 注入检测、工具参数校验、脱敏                          |
+| `observability/`   | trace、metrics、事件总线、请求上下文                                |
+| `mcp_adapter/`     | MCP JSON-RPC 适配层                                        |
+| `config/`          | Agent、RAG、Chroma、Prompt 配置                              |
+| `data/`            | 知识库文件和外部使用记录数据                                          |
+| `docs/`            | demo 说明、面试讲稿和架构说明                                       |
+| `tests/`           | 单元测试、Prompt 回归、安全、MCP、RAG 等测试                           |
+| `evals/`           | RAG/Agent golden set 评测数据                               |
+
+README 对目录职责也做了概括：`agent/` 是 Agent、工具、中间件、会话记忆；`api/` 是 FastAPI 服务；`rag/` 是向量库和 RAG；`services/` 是数据服务适配器；`safety/` 是安全；`observability/` 是 trace；`mcp_adapter/` 是 MCP JSON-RPC 适配层。
+
+---
+
+# 15. 典型请求链路
+
+## 15.1 普通知识库问答
+
+```mermaid
+flowchart LR
+    User["主刷缠绕毛发怎么办？"] --> API["/chat"]
+    API --> Safe["安全检查"]
+    Safe --> Agent["ReactAgent"]
+    Agent --> Memory["读取历史消息"]
+    Agent --> LLM["模型推理"]
+    LLM --> Tool["调用 rag_summarize"]
+    Tool --> RAG["Chroma 检索 + hybrid rank"]
+    RAG --> Answer["生成带引用答案"]
+    Answer --> Memory2["写入会话记忆"]
+    Memory2 --> Resp["返回用户"]
+```
+
+演示文档中给出的普通客服问答示例是 `/chat` 接口收到“主刷缠绕毛发怎么办？”，预期进入 Agent 链路，必要时调用 RAG 工具，并返回带引用来源的处理建议。
+
+## 15.2 个人使用报告
+
+```mermaid
+flowchart LR
+    User["帮我生成本月使用报告"] --> API["/chat"]
+    API --> Detect["检测到 报告/使用记录"]
+    Detect --> WF["ReportWorkflow"]
+    WF --> UID["get_user_id"]
+    WF --> Month["get_current_month"]
+    WF --> Record["fetch_external_data"]
+    WF --> RAG["rag_summarize 保养建议"]
+    WF --> Report["结构化报告"]
+    Report --> Resp["返回用户"]
+```
+
+`/chat` 中如果检测到消息包含“报告”或“使用记录”，会绕过普通 ReAct 链路，直接使用 `ReportWorkflow` 生成答案。
+
+---
+
+# 16. 启动与部署架构
+
+本地启动顺序一般是：先安装依赖，再配置 `.env`，加载知识库，最后启动 Streamlit 或 FastAPI。README 给出的命令包括 `python -m rag.vector_store` 加载知识库，`streamlit run app.py` 启动演示，`uvicorn api.server:app --host 0.0.0.0 --port 8000` 启动服务。
+
+`.env.example` 中包含 DashScope Key、默认用户、默认城市、当前月份、模型 provider、模型名、embedding 模型名、允许工具、trace 开关、API Key、SQLite 路径和限流配置。
+
+Dockerfile 使用 `python:3.10-slim`，复制项目核心目录，安装当前包，并以 `uvicorn api.server:app --host 0.0.0.0 --port 8000` 作为容器启动命令。
+
+---
+
+# 17. 这个项目的核心亮点
+
+第一，**业务链路不是纯 Prompt**。普通问答走 ReAct Agent，报告生成走 `ReportWorkflow` 显式流程，避免高确定性业务完全依赖模型自由发挥。
+
+第二，**工具体系工程化**。工具有注册表、scope、input schema、allowlist、参数校验、中间件、trace、缓存、重试和熔断，不是简单写几个 Python 函数。
+
+第三，**RAG 有完整闭环**。它包括文档加载、MD5 去重、chunk 切分、metadata、Chroma 存储、检索、hybrid rank、RAG 注入过滤、引用来源和评测集。
+
+第四，**具备服务化交付能力**。FastAPI 提供 API Key 鉴权、限流、SSE、MCP、trace、metrics、judge 等接口，Dockerfile 支持容器化部署。
+
+第五，**可观测性较完整**。项目有 request_id、session_id、trace span、OTel 风格导出、Prometheus 文本指标、SSE 事件总线，可以定位单次请求中模型、工具、RAG 哪一步慢或失败。
+
+---
+
+# 18. 可以放进文档里的简化版架构图
+
+```mermaid
+flowchart LR
+    A["用户"] --> B["Streamlit / FastAPI"]
+    B --> C["安全校验<br/>鉴权 / 限流 / 注入检测"]
+    C --> D{"请求类型"}
+    D -->|普通问答| E["ReactAgent<br/>LangChain ReAct"]
+    D -->|报告生成| F["ReportWorkflow<br/>显式业务流程"]
+    D -->|复杂任务| G["PlannerAgent<br/>任务拆解与聚合"]
+
+    E --> H["工具层<br/>ToolRegistry + Middleware"]
+    F --> H
+    G --> H
+
+    H --> I["RAG<br/>Chroma + Hybrid Rank + Citations"]
+    H --> J["ToolDataService<br/>天气 / 用户 / 使用记录"]
+    H --> K["MCP Adapter<br/>JSON-RPC tools/list tools/call"]
+
+    I --> L["模型层<br/>Tongyi / Doubao / vLLM / Mock"]
+    L --> M["ModelRouter<br/>健康度 / 降级 / 熔断"]
+
+    E --> N["ConversationMemory"]
+    N --> O["SQLite 会话持久化"]
+
+    B --> P["Trace / Metrics / EventBus"]
+    P --> Q["/traces / /metrics / SSE"]
+```
+
+
+

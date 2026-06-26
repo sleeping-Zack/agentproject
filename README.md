@@ -11,6 +11,7 @@
 - 可控数据服务：用户、城市、月份和天气从配置读取，避免随机输出。
 - 显式工作流：报告生成走 `ReportWorkflow`，减少纯 Prompt 编排的不确定性。
 - 安全与可观测：提示词注入拦截、RAG 注入检测、工具参数校验、敏感字段脱敏、请求/工具/RAG trace、OpenTelemetry 风格 span。
+- Harness 控制层：统一 `AgentRunner`/`AgentState`，支持预算停止、动态工具策略、真实审批、答案验证、artifact 存储和诊断 trace。
 - 服务端能力：API Key 鉴权、限流、SQLite 会话/trace 持久化、缓存/任务队列抽象。
 - 服务化交付：FastAPI API、Streamlit UI、Dockerfile、CI 和 pytest 测试。
 
@@ -53,6 +54,11 @@ uvicorn api.server:app --host 0.0.0.0 --port 8000
 - `GET /health`
 - `GET /tools/manifest`
 - `POST /chat`
+- `POST /harness/run`
+- `GET /approvals/{approval_id}`
+- `POST /approvals/{approval_id}/approve`
+- `POST /approvals/{approval_id}/deny`
+- `GET /artifacts/{request_id}`
 - `POST /mcp`
 - `GET /traces/{request_id}`
 - `GET /traces/{request_id}/otel`
@@ -68,6 +74,8 @@ python mcp_server.py
 ```powershell
 python -m pytest tests -q
 python scripts/evaluate_rag.py
+python scripts/evaluate_agent.py --dry-run
+python scripts/evaluate_agent.py --gate --report storage/agent_eval_report.json
 python scripts/benchmark_api.py --url http://127.0.0.1:8000/chat --api-key dev-api-key
 ```
 
@@ -442,7 +450,7 @@ flowchart LR
 | `mcp_adapter/`     | MCP JSON-RPC 适配层                                        |
 | `config/`          | Agent、RAG、Chroma、Prompt 配置                              |
 | `data/`            | 知识库文件和外部使用记录数据                                          |
-| `docs/`            | demo 说明、面试讲稿和架构说明                                       |
+| `docs/`            | demo 说明、面试讲稿、Harness 讲稿和架构说明                            |
 | `tests/`           | 单元测试、Prompt 回归、安全、MCP、RAG 等测试                           |
 | `evals/`           | RAG/Agent golden set 评测数据                               |
 
@@ -541,6 +549,4 @@ flowchart LR
     B --> P["Trace / Metrics / EventBus"]
     P --> Q["/traces / /metrics / SSE"]
 ```
-
-
 

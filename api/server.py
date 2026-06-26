@@ -11,6 +11,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent.react_agent import ReactAgent
+from agent.runner import AgentRunner, AgentTask, ReactAgentBackend
 from agent.tools.agent_tools import (
     fetch_external_data,
     get_weather,
@@ -26,6 +27,8 @@ from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
 from rag.judge import LLMJudge, evaluate_batch
 from safety.security import UnsafeInputError, assert_safe_user_input
+from services.approval_store import SQLiteApprovalStore
+from services.artifact_store import SQLiteArtifactStore
 from services.persistence import SQLiteStore
 from services.rate_limit import RateLimiter
 from utils.streaming import get_final_response
@@ -33,6 +36,13 @@ from utils.streaming import get_final_response
 app = FastAPI(title="Sweeper Agent API", version="0.4.0")
 store = SQLiteStore(os.getenv("AGENT_DB_PATH", "storage/agent.db"))
 agent = ReactAgent(session_store=store)
+approval_store = SQLiteApprovalStore(os.getenv("AGENT_APPROVAL_DB_PATH", "storage/approvals.db"))
+artifact_store = SQLiteArtifactStore(os.getenv("AGENT_ARTIFACT_DB_PATH", "storage/artifacts.db"))
+harness_runner = AgentRunner(
+    backend=ReactAgentBackend(agent=agent),
+    approval_store=approval_store,
+    artifact_store=artifact_store,
+)
 rate_limiter = RateLimiter(
     max_requests=int(os.getenv("AGENT_RATE_LIMIT_REQUESTS", "60")),
     window_seconds=int(os.getenv("AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")),
@@ -73,6 +83,30 @@ class PlanResponse(BaseModel):
     results: List[Dict]
     answer: str
     trace_url: str
+
+
+class HarnessRunRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    session_id: str = "default"
+    tenant_id: Optional[str] = None
+    user_role: str = "user"
+    scene: str = "default"
+    approval_id: Optional[str] = None
+
+
+class HarnessRunResponse(BaseModel):
+    request_id: str
+    session_id: str
+    status: str
+    answer: str
+    approval_id: Optional[str] = None
+    artifacts: List[Dict]
+    verifier: Optional[Dict] = None
+    trace_url: str
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decided_by: str = "operator"
 
 
 class JudgeCase(BaseModel):
@@ -203,7 +237,6 @@ async def chat_stream(
         HEARTBEAT_INTERVAL = float(os.getenv("AGENT_SSE_HEARTBEAT_SECONDS", "15"))
 
         # 在后台线程跑 Agent，主协程同时排空 message chunk 与 event_bus 中的 tool 事件
-        chunk_queue: "asyncio.Queue[Optional[str]]" = None  # noqa: E501  仅用于类型暗示
         import queue as _queue
         chunk_q: _queue.Queue = _queue.Queue()
 
@@ -334,6 +367,108 @@ async def plan_endpoint(
         answer=plan_result.answer,
         trace_url=f"/traces/{request_id}",
     )
+
+
+@app.post("/harness/run", response_model=HarnessRunResponse)
+async def harness_run(
+    request: HarnessRunRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+) -> HarnessRunResponse:
+    _authorize(x_api_key)
+    tenant_id = _resolve_tenant(request.tenant_id, x_tenant_id)
+    _rate_limit(raw_request, tenant_id)
+    try:
+        assert_safe_user_input(request.message)
+    except UnsafeInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    task = AgentTask(
+        query=request.message,
+        session_id=request.session_id,
+        tenant_id=tenant_id,
+        user_role=request.user_role,
+        scene=request.scene,
+        approval_id=request.approval_id,
+    )
+    result = await asyncio.to_thread(harness_runner.run, task)
+    trace_payload = trace_recorder.export_trace(result.request_id)
+    store.save_trace(result.request_id, request.session_id, trace_payload, tenant_id=tenant_id)
+    return HarnessRunResponse(
+        request_id=result.request_id,
+        session_id=request.session_id,
+        status=result.state.status,
+        answer=result.answer,
+        approval_id=result.approval_id,
+        artifacts=[artifact.__dict__ for artifact in result.artifacts],
+        verifier=result.verifier.__dict__ if result.verifier else None,
+        trace_url=f"/traces/{result.request_id}",
+    )
+
+
+@app.get("/approvals/{approval_id}")
+async def get_approval(
+    approval_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+) -> Dict:
+    _authorize(x_api_key)
+    tenant_id = _resolve_tenant(None, x_tenant_id)
+    _rate_limit(raw_request, tenant_id)
+    try:
+        return approval_store.get(approval_id).__dict__
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="approval not found") from exc
+
+
+@app.post("/approvals/{approval_id}/approve")
+async def approve_approval(
+    approval_id: str,
+    request: ApprovalDecisionRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+) -> Dict:
+    _authorize(x_api_key)
+    tenant_id = _resolve_tenant(None, x_tenant_id)
+    _rate_limit(raw_request, tenant_id)
+    try:
+        return approval_store.approve(approval_id, request.decided_by).__dict__
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="approval not found") from exc
+
+
+@app.post("/approvals/{approval_id}/deny")
+async def deny_approval(
+    approval_id: str,
+    request: ApprovalDecisionRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+) -> Dict:
+    _authorize(x_api_key)
+    tenant_id = _resolve_tenant(None, x_tenant_id)
+    _rate_limit(raw_request, tenant_id)
+    try:
+        return approval_store.deny(approval_id, request.decided_by).__dict__
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="approval not found") from exc
+
+
+@app.get("/artifacts/{request_id}")
+async def list_artifacts(
+    request_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+) -> Dict:
+    _authorize(x_api_key)
+    tenant_id = _resolve_tenant(None, x_tenant_id)
+    _rate_limit(raw_request, tenant_id)
+    artifacts = artifact_store.list_artifacts(request_id, tenant_id=tenant_id)
+    return {"artifacts": [artifact.__dict__ for artifact in artifacts]}
 
 
 @app.post("/judge")

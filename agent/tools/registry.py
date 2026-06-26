@@ -8,6 +8,10 @@ class ToolSpec:
     description: str
     scope: str
     input_schema: Dict
+    risk_level: str = "low"
+    side_effect: str = "read"
+    requires_approval: bool = False
+    timeout_seconds: int = 30
 
     def as_manifest_item(self) -> Dict:
         return {
@@ -15,6 +19,10 @@ class ToolSpec:
             "description": self.description,
             "scope": self.scope,
             "input_schema": self.input_schema,
+            "risk_level": self.risk_level,
+            "side_effect": self.side_effect,
+            "requires_approval": self.requires_approval,
+            "timeout_seconds": self.timeout_seconds,
         }
 
 
@@ -34,6 +42,9 @@ class ToolRegistry:
 
     def allowed_specs(self) -> List[ToolSpec]:
         return [spec for name, spec in self._tools.items() if name in self.allowed_tools]
+
+    def get_spec(self, tool_name: str) -> ToolSpec | None:
+        return self._tools.get(tool_name)
 
     def as_mcp_manifest(self) -> Dict:
         return {
@@ -105,6 +116,10 @@ def build_default_tool_registry(allowed_tools: Iterable[str]) -> ToolRegistry:
                 },
                 "required": ["user_id", "month"],
             },
+            risk_level="medium",
+            side_effect="read_sensitive",
+            requires_approval=True,
+            timeout_seconds=10,
         )
     )
     registry.register(
@@ -113,6 +128,7 @@ def build_default_tool_registry(allowed_tools: Iterable[str]) -> ToolRegistry:
             description="标记后续模型调用进入报告生成场景",
             scope="runtime:write",
             input_schema={"type": "object", "properties": {}, "required": []},
+            side_effect="runtime_context",
         )
     )
     return registry

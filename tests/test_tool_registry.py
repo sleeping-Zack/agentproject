@@ -26,6 +26,10 @@ def test_registry_exports_mcp_style_manifest():
                 "properties": {"city": {"type": "string"}},
                 "required": ["city"],
             },
+            "risk_level": "low",
+            "side_effect": "read",
+            "requires_approval": False,
+            "timeout_seconds": 30,
         }
     ]
 

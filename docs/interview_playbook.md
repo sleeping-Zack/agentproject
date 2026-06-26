@@ -8,13 +8,18 @@
 
 第三轮是生产就绪补强：我补了真正的 MCP JSON-RPC stdio/HTTP server、50+ RAG golden set 和指标、显式 ReportWorkflow、API Key 鉴权、限流、SQLite 持久化、模型 provider 降级、OpenTelemetry 风格 span、RAG 注入检测、工具参数校验、benchmark 脚本、demo 文档和这份面试讲稿。这个阶段解决的是“能不能对标真实 Agent 应用岗的工程要求”。
 
+第四轮是 Harness 控制层补强：我补了统一 `AgentRunner`、`AgentState`、预算停止、动态工具策略、真实审批 API、答案验证闭环、artifact 存储、诊断级 trace、模型 router 接入和 Agent eval gate。这个阶段解决的是“Agent 能不能被平台化控制、暂停、验证、复盘和门禁发布”。
+
 ## 架构图
 
 ```mermaid
 flowchart LR
     U["用户/客户端"] --> API["FastAPI / Streamlit"]
     API --> SEC["安全校验 / API Key / 限流"]
-    SEC --> AG["LangChain Agent"]
+    SEC --> HR["AgentRunner / AgentState"]
+    HR --> POL["ToolPolicy / Approval"]
+    HR --> AG["LangChain Agent"]
+    HR --> VER["AnswerVerifier / ArtifactStore"]
     SEC --> WF["ReportWorkflow"]
     AG --> TOOLS["工具注册表 / MCP Tools"]
     WF --> TOOLS
@@ -45,6 +50,8 @@ flowchart LR
 
 `safety/security.py` 是安全边界。它覆盖用户 prompt injection、RAG 内容注入、工具参数校验、敏感字段脱敏和敏感工具确认。
 
+`agent/runner.py` 和 `agent/state.py` 是 Harness 控制层。Runner 不重写 ReAct，而是统一管理请求状态、预算、策略、审批、验证和 artifact。`/harness/run` 走这条链路，适合展示生产级 Agent 控制面。
+
 ## 面试回答：为什么要做 MCP？
 
 我会回答：Agent 应用的核心不是只会调用本地函数，而是要把工具标准化、可发现、可权限控制。MCP 提供了工具发现和调用协议，所以我把原本散落在 LangChain 里的工具抽象成 registry，再通过 JSON-RPC 暴露 `initialize`、`tools/list`、`tools/call`。这样同一套工具既能被 Agent 内部调用，也能被外部 MCP 客户端调用。
@@ -69,6 +76,10 @@ flowchart LR
 
 项目固定 Python 3.10.11，用 `pyproject.toml` 管依赖，用 `.env.example` 管环境变量，用 Dockerfile 和 CI 保证可复现。测试覆盖 API、MCP、RAG 指标、工作流、安全、工具、记忆、trace、模型 provider 和压测指标。提交前跑 `pytest`、`ruff`、导入检查和 `pip check`。
 
+## 面试回答：为什么要做 Harness Control Layer？
+
+我会回答：ReAct 解决的是“模型下一步该调用什么工具”，Harness 解决的是“这次运行是否允许继续、是否超预算、是否需要人工审批、最终答案是否可靠、失败后能不能复盘”。所以我新增了 `AgentRunner` 作为外层控制器，把 `AgentState`、`ToolPolicy`、`ApprovalStore`、`AnswerVerifier`、`ArtifactStore` 和诊断 trace 串起来。这样项目不只是能跑 Demo，而是具备平台型 Agent 应用的控制面。
+
 ## 后续路线
 
 如果继续做，我会把 SQLite 换成 Postgres，把内存限流换成 Redis，把 Mock/Tongyi provider 扩成 OpenAI-compatible provider，把 RAG rerank 接真实 reranker，并把 trace 接入 Jaeger 或 Tempo。
@@ -76,3 +87,5 @@ flowchart LR
 ---
 
 > 📘 **第四轮升级**：多模型路由、熔断降级、结构化日志、Prompt 版本、SSE 增强、多租户、异步化、多级缓存、端到端评测——详见 [`interview_playbook_v4.md`](./interview_playbook_v4.md)。
+
+> 📘 **Harness 专项讲稿**：Runner、State、审批、验证、artifact 和 eval gate 详见 [`interview_harness_playbook.md`](./interview_harness_playbook.md)。

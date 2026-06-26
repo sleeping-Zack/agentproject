@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from observability.tracing import trace_recorder
+from rag.eval_gate import EvalGate, EvalThresholds
 
 
 @dataclass
@@ -37,6 +38,9 @@ class CaseResult:
     tool_recall: float
     keyword_recall: float
     rejected: Optional[bool]
+    bucket: str = "general"
+    latency_ms: float = 0.0
+    error_type: Optional[str] = None
     error: Optional[str] = None
     detail: Dict[str, Any] = field(default_factory=dict)
 
@@ -58,14 +62,15 @@ def _evaluate_case(agent, case: Dict) -> CaseResult:
     expected_tools = [t.get("name") for t in case.get("expected_tools", [])]
     expected_keywords = case.get("expected_keywords", [])
     expected_rejection = case.get("expected_rejection", False)
+    bucket = case.get("bucket", _infer_bucket(case))
 
     from uuid import uuid4
     request_id = str(uuid4())
+    started = time.perf_counter()
 
     try:
         if case.get("turns"):
             # 多轮：先按 turns 喂入历史，再用最后一条 user 触发
-            from agent.memory import ConversationMemory
             for turn in case["turns"][:-1]:
                 agent.memory.add_message(
                     case["id"], turn["role"], turn["content"], tenant_id="eval"
@@ -81,7 +86,8 @@ def _evaluate_case(agent, case: Dict) -> CaseResult:
     except Exception as exc:
         return CaseResult(
             id=case["id"], passed=False, tool_recall=0.0, keyword_recall=0.0,
-            rejected=None, error=str(exc),
+            rejected=None, bucket=bucket, latency_ms=_elapsed_ms(started),
+            error_type="exception", error=str(exc),
             detail={"trace": traceback.format_exc()[-500:]},
         )
 
@@ -90,7 +96,9 @@ def _evaluate_case(agent, case: Dict) -> CaseResult:
     if expected_rejection:
         return CaseResult(
             id=case["id"], passed=rejected, tool_recall=1.0 if rejected else 0.0,
-            keyword_recall=1.0, rejected=rejected,
+            keyword_recall=1.0, rejected=rejected, bucket=bucket,
+            latency_ms=_elapsed_ms(started),
+            error_type=None if rejected else "expected_rejection_not_triggered",
             detail={"answer_preview": answer[:120]},
         )
 
@@ -111,7 +119,9 @@ def _evaluate_case(agent, case: Dict) -> CaseResult:
 
     return CaseResult(
         id=case["id"], passed=passed, tool_recall=tool_recall,
-        keyword_recall=keyword_recall, rejected=False,
+        keyword_recall=keyword_recall, rejected=False, bucket=bucket,
+        latency_ms=_elapsed_ms(started),
+        error_type=None if passed else _failure_type(tool_recall, keyword_recall),
         detail={
             "actual_tools": actual_tools,
             "expected_tools": expected_tools,
@@ -130,6 +140,17 @@ def main() -> None:
     parser.add_argument("--report", help="写一份机读 JSON 报告到该路径")
     parser.add_argument("--dry-run", action="store_true",
                         help="不实际跑 Agent，只校验 golden 文件格式（CI 默认）")
+    parser.add_argument("--gate", action="store_true", help="启用质量门禁，未达阈值返回非 0")
+    parser.add_argument("--min-pass-rate", type=float,
+                        default=float(os.getenv("AGENT_EVAL_MIN_PASS_RATE", "0.85")))
+    parser.add_argument("--min-tool-recall", type=float,
+                        default=float(os.getenv("AGENT_EVAL_MIN_TOOL_RECALL", "0.75")))
+    parser.add_argument("--min-keyword-recall", type=float,
+                        default=float(os.getenv("AGENT_EVAL_MIN_KEYWORD_RECALL", "0.75")))
+    parser.add_argument("--max-p95-latency-ms", type=float,
+                        default=float(os.getenv("AGENT_EVAL_MAX_P95_LATENCY_MS", "5000")))
+    parser.add_argument("--max-avg-cost", type=float,
+                        default=float(os.getenv("AGENT_EVAL_MAX_AVG_COST", "0.2")))
     args = parser.parse_args()
 
     cases = load_golden(Path(args.golden))
@@ -169,17 +190,46 @@ def main() -> None:
         "keyword_recall": _avg(r.keyword_recall for r in results),
         "duration_s": round(time.time() - started, 2),
     }
+    latency = {
+        "p50_ms": _percentile([r.latency_ms for r in results], 50),
+        "p95_ms": _percentile([r.latency_ms for r in results], 95),
+    }
+    # 真实 token/cost 由生产 trace 注入；离线评测默认按 0 处理，保证无 key 环境可跑。
+    cost = {"avg": 0.0}
+    case_payload = [r.__dict__ for r in results]
+    gate_result = EvalGate(
+        EvalThresholds(
+            min_pass_rate=args.min_pass_rate,
+            min_tool_recall=args.min_tool_recall,
+            min_keyword_recall=args.min_keyword_recall,
+            max_p95_latency_ms=args.max_p95_latency_ms,
+            max_avg_cost=args.max_avg_cost,
+        )
+    ).evaluate({
+        "aggregate": aggregate,
+        "latency": latency,
+        "cost": cost,
+        "cases": case_payload,
+    })
     print(json.dumps(aggregate, ensure_ascii=False))
 
+    report_payload = {
+        "aggregate": aggregate,
+        "latency": latency,
+        "cost": cost,
+        "gate": gate_result.__dict__,
+        "cases": case_payload,
+    }
     if args.report:
         Path(args.report).write_text(
-            json.dumps({"aggregate": aggregate,
-                        "cases": [r.__dict__ for r in results]},
-                       ensure_ascii=False, indent=2),
+            json.dumps(report_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
     if aggregate["pass_rate"] < float(os.getenv("AGENT_EVAL_PASS_THRESHOLD", "0.0")):
+        sys.exit(1)
+    if args.gate and not gate_result.passed:
+        print(json.dumps({"gate": gate_result.__dict__}, ensure_ascii=False))
         sys.exit(1)
 
 
@@ -188,6 +238,39 @@ def _avg(seq) -> float:
     if not seq:
         return 0.0
     return round(sum(float(x) for x in seq) / len(seq), 3)
+
+
+def _elapsed_ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000, 3)
+
+
+def _percentile(values: List[float], percentile: int) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, round((percentile / 100) * (len(ordered) - 1)))
+    return round(ordered[index], 3)
+
+
+def _infer_bucket(case: Dict) -> str:
+    expected_tools = {tool.get("name") for tool in case.get("expected_tools", [])}
+    if "fetch_external_data" in expected_tools or "报告" in case.get("query", ""):
+        return "report"
+    if "rag_summarize" in expected_tools:
+        return "rag"
+    if expected_tools:
+        return "tool"
+    if case.get("expected_rejection"):
+        return "safety"
+    return "general"
+
+
+def _failure_type(tool_recall: float, keyword_recall: float) -> str:
+    if tool_recall < 0.5:
+        return "tool_miss"
+    if keyword_recall < 0.5:
+        return "keyword_miss"
+    return "failed"
 
 
 if __name__ == "__main__":

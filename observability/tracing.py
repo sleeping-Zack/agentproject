@@ -66,6 +66,52 @@ class TraceRecorder:
             "events": [event.export() for event in trace.events],
         }
 
+    def record_diagnostic_event(
+        self,
+        request_id: str,
+        step_id: str,
+        event_type: str,
+        status: str,
+        latency_ms: float,
+        tool: Optional[str] = None,
+        args_hash: Optional[str] = None,
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        cost: float = 0.0,
+        evidence_ids: Optional[List[str]] = None,
+        verifier: Optional[Dict] = None,
+        retry: int = 0,
+        prompt_version: str = "",
+        model_name: str = "",
+        failure_reason: Optional[str] = None,
+    ) -> TraceEvent:
+        trace = self._traces[request_id]
+        event = TraceEvent(
+            category="diagnostic",
+            name=event_type,
+            started_at=time.time(),
+            duration_ms=latency_ms,
+            metadata={
+                "step_id": step_id,
+                "type": event_type,
+                "tool": tool,
+                "args_hash": args_hash,
+                "status": status,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "cost": cost,
+                "evidence_ids": evidence_ids or [],
+                "verifier": verifier or {},
+                "retry": retry,
+                "prompt_version": prompt_version,
+                "model_name": model_name,
+                "failure_reason": failure_reason,
+            },
+            error=failure_reason if status == "failed" else None,
+        )
+        trace.events.append(event)
+        return event
+
     def export_otel_spans(self, request_id: str) -> List[Dict]:
         trace = self._traces[request_id]
         spans = []

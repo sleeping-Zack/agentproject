@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 import pytest
 
 from model.providers import ProviderConfig, build_model_provider

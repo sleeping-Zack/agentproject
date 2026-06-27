@@ -31,6 +31,10 @@ class AgentBackendResult:
     evidence: List[Dict[str, Any]] = field(default_factory=list)
     tool_results: List[Dict[str, Any]] = field(default_factory=list)
     model_name: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost: float = 0.0
+    cost_mode: str = "estimated"
 
 
 @dataclass
@@ -61,9 +65,12 @@ class ReactAgentBackend:
                 user_role=task.user_role,
                 scene=task.scene,
                 approval_id=task.approval_id,
+                max_tool_calls=state.budget.max_tool_calls if state is not None else None,
             )
         )
         trace_payload = trace_recorder.export_trace(task.request_id)
+        evidence = self._extract_evidence(trace_payload)
+        tokens_in, tokens_out, cost, cost_mode = self._extract_usage(trace_payload)
         tool_results = [
             {
                 "tool": event["name"],
@@ -75,9 +82,45 @@ class ReactAgentBackend:
         ]
         return AgentBackendResult(
             answer=get_final_response(chunks),
+            evidence=evidence,
             tool_results=tool_results,
             model_name=type(getattr(self.agent, "agent", self.agent)).__name__,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost=cost,
+            cost_mode=cost_mode,
         )
+
+    @staticmethod
+    def _extract_evidence(trace_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        evidence: List[Dict[str, Any]] = []
+        for event in trace_payload.get("events", []):
+            metadata = event.get("metadata", {})
+            if event.get("category") == "rag" and event.get("name") == "evidence":
+                for item in metadata.get("evidence", []):
+                    if isinstance(item, dict):
+                        evidence.append(item)
+            if event.get("category") == "diagnostic" and metadata.get("type") == "rag_evidence":
+                for item in metadata.get("evidence", []):
+                    if isinstance(item, dict):
+                        evidence.append(item)
+        return evidence
+
+    @staticmethod
+    def _extract_usage(trace_payload: Dict[str, Any]) -> tuple[int, int, float, str]:
+        tokens_in = 0
+        tokens_out = 0
+        cost = 0.0
+        cost_mode = "estimated"
+        for event in trace_payload.get("events", []):
+            metadata = event.get("metadata", {})
+            if event.get("category") != "diagnostic" or metadata.get("type") != "model_usage":
+                continue
+            tokens_in += int(metadata.get("tokens_in") or 0)
+            tokens_out += int(metadata.get("tokens_out") or 0)
+            cost += float(metadata.get("cost") or 0.0)
+            cost_mode = metadata.get("cost_mode") or "actual"
+        return tokens_in, tokens_out, round(cost, 6), cost_mode
 
 
 class AgentRunner:
@@ -168,7 +211,11 @@ class AgentRunner:
                 )
             answer = backend_result.answer
             tool_results = backend_result.tool_results
-            tokens_in, tokens_out, cost = self._estimate_usage(task.query, answer)
+            tokens_in, tokens_out, cost, cost_mode = self._usage_for_result(
+                task.query,
+                answer,
+                backend_result,
+            )
             state.budget.record_tokens(tokens_in + tokens_out)
             state.budget.record_cost(cost)
             if not state.budget.can_continue():
@@ -182,6 +229,7 @@ class AgentRunner:
                     tokens_in=tokens_in,
                     tokens_out=tokens_out,
                     cost=cost,
+                    cost_mode=cost_mode,
                     failure_reason=state.error,
                 )
                 return self._result(state, state.error or "budget exhausted", verifier_result)
@@ -219,6 +267,7 @@ class AgentRunner:
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 cost=cost,
+                cost_mode=cost_mode,
             )
             if verifier_result.passed:
                 break
@@ -421,6 +470,7 @@ class AgentRunner:
         tokens_in: int = 0,
         tokens_out: int = 0,
         cost: float = 0.0,
+        cost_mode: str = "estimated",
     ) -> None:
         trace_recorder.record_diagnostic_event(
             request_id=state.request_id,
@@ -438,7 +488,24 @@ class AgentRunner:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cost=cost,
+            cost_mode=cost_mode,
         )
+
+    def _usage_for_result(
+        self,
+        query: str,
+        answer: str,
+        backend_result: AgentBackendResult,
+    ) -> tuple[int, int, float, str]:
+        if backend_result.tokens_in or backend_result.tokens_out or backend_result.cost:
+            return (
+                backend_result.tokens_in,
+                backend_result.tokens_out,
+                backend_result.cost,
+                backend_result.cost_mode or "actual",
+            )
+        tokens_in, tokens_out, cost = self._estimate_usage(query, answer)
+        return tokens_in, tokens_out, cost, "estimated"
 
     def _estimate_usage(self, query: str, answer: str) -> tuple[int, int, float]:
         tokens_in = max(1, (len(query) + 3) // 4)

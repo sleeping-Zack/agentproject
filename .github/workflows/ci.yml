@@ -20,3 +20,8 @@ jobs:
         run: python -m pytest tests -q
       - name: Agent eval smoke (dry-run, validates golden set + script)
         run: python scripts/evaluate_agent.py --dry-run
+      - name: Harness eval smoke (mock/offline)
+        env:
+          MODEL_PROVIDER: mock
+          CI_SMOKE_LIMIT: "1"
+        run: python scripts/evaluate_agent.py --mode harness --smoke --gate --min-pass-rate 0.0 --min-tool-recall 0.0 --min-keyword-recall 0.0

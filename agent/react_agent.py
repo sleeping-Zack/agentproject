@@ -123,7 +123,8 @@ class ReactAgent:
                        tenant_id: str = "default",
                        user_role: str = "user",
                        scene: str = "default",
-                       approval_id: Optional[str] = None):
+                       approval_id: Optional[str] = None,
+                       max_tool_calls: Optional[int] = None):
         request_id = request_id or str(uuid4())
         trace_recorder.start_trace(request_id=request_id, session_id=session_id)
         request_start = metrics_registry.now()
@@ -153,9 +154,11 @@ class ReactAgent:
                             context={"report": False, "request_id": request_id,
                                      "session_id": session_id, "tenant_id": tenant_id,
                                      "user_role": user_role, "scene": scene,
-                                     "approval_id": approval_id},
+                                     "approval_id": approval_id,
+                                     "max_tool_calls": max_tool_calls},
                     ):
                         latest_message = chunk["messages"][-1]
+                        self._record_model_usage(request_id, latest_message)
                         if latest_message.content:
                             latest_response = latest_message.content.strip() + "\n"
                             yield latest_response
@@ -173,6 +176,41 @@ class ReactAgent:
             else:
                 metrics_registry.inc_request(status="empty")
             metrics_registry.observe_request_latency(metrics_registry.elapsed_ms(request_start))
+
+    def _record_model_usage(self, request_id: str, message) -> None:
+        usage = getattr(message, "usage_metadata", None) or {}
+        response_metadata = getattr(message, "response_metadata", None) or {}
+        token_usage = response_metadata.get("token_usage") or response_metadata.get("usage") or {}
+        tokens_in = int(
+            usage.get("input_tokens")
+            or usage.get("prompt_tokens")
+            or token_usage.get("prompt_tokens")
+            or token_usage.get("input_tokens")
+            or 0
+        )
+        tokens_out = int(
+            usage.get("output_tokens")
+            or usage.get("completion_tokens")
+            or token_usage.get("completion_tokens")
+            or token_usage.get("output_tokens")
+            or 0
+        )
+        if not tokens_in and not tokens_out:
+            return
+        cost_per_1k = float(os.getenv("AGENT_ESTIMATED_COST_PER_1K_TOKENS", "0.001"))
+        cost = round(((tokens_in + tokens_out) / 1000.0) * cost_per_1k, 6)
+        trace_recorder.record_diagnostic_event(
+            request_id=request_id,
+            step_id="model-usage",
+            event_type="model_usage",
+            status="ok",
+            latency_ms=0.0,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost=cost,
+            cost_mode="actual",
+            model_name=type(chat_model).__name__,
+        )
 
 
 if __name__ == '__main__':

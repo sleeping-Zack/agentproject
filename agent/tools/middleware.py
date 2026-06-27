@@ -65,6 +65,14 @@ def monitor_tool(
     scene = request.runtime.context.get("scene", "default")
     approval_id = request.runtime.context.get("approval_id")
 
+    budget_result = _enforce_tool_budget(
+        runtime_context=request.runtime.context,
+        tool_name=tool_name,
+        tool_call_id=request.tool_call.get("id", ""),
+    )
+    if budget_result is not None:
+        return budget_result
+
     policy_result = _enforce_tool_policy(
         tool_name=tool_name,
         tool_args=tool_args,
@@ -197,8 +205,28 @@ def monitor_tool(
         return ToolMessage(
             content=f"工具调用失败：{exc}。请向用户说明无法获取该数据或换一种方式。",
             tool_call_id=request.tool_call.get("id", ""),
+        name=tool_name,
+    )
+
+
+def _enforce_tool_budget(
+    runtime_context: dict,
+    tool_name: str,
+    tool_call_id: str,
+) -> ToolMessage | None:
+    max_tool_calls = runtime_context.get("max_tool_calls")
+    if max_tool_calls is None:
+        return None
+    used_tool_calls = int(runtime_context.get("used_tool_calls", 0))
+    if used_tool_calls >= int(max_tool_calls):
+        metrics_registry.inc_tool_call(tool_name, status="budget_exceeded")
+        return ToolMessage(
+            content="工具调用预算已耗尽，已拒绝继续调用工具。",
+            tool_call_id=tool_call_id,
             name=tool_name,
         )
+    runtime_context["used_tool_calls"] = used_tool_calls + 1
+    return None
 
 
 def _enforce_tool_policy(

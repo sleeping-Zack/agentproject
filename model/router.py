@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Dict, List, Optional
@@ -120,8 +121,8 @@ def build_default_router_from_config(rag_conf: Dict) -> ModelRouter:
     router = ModelRouter()
     router.register(ProviderEntry(
         config=ProviderConfig(
-            provider=rag_conf.get("model_provider", "tongyi"),
-            model_name=rag_conf["chat_model_name"],
+            provider=os.getenv("MODEL_PROVIDER", rag_conf.get("model_provider", "tongyi")),
+            model_name=os.getenv("CHAT_MODEL_NAME", rag_conf["chat_model_name"]),
         ),
         scene=DEFAULT_SCENE,
         weight=10,

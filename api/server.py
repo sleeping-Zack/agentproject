@@ -310,9 +310,11 @@ async def plan_endpoint(
     raw_request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
 ) -> PlanResponse:
-    _authorize(x_api_key)
-    tenant_id = _resolve_tenant(request.tenant_id, x_tenant_id)
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id, request.tenant_id)
+    tenant_id = auth.tenant_id
     _rate_limit(raw_request, tenant_id)
     request_id = str(uuid4())
     try:
@@ -323,7 +325,11 @@ async def plan_endpoint(
     plan_result = await asyncio.to_thread(
         agent.run_plan, request.message, request_id, tenant_id
     )
-    trace_payload = trace_recorder.export_trace(request_id)
+    try:
+        trace_payload = trace_recorder.export_trace(request_id)
+    except KeyError:
+        trace_recorder.start_trace(request_id=request_id, session_id="planner")
+        trace_payload = trace_recorder.export_trace(request_id)
     store.save_trace(request_id, "planner", trace_payload, tenant_id=tenant_id)
     return PlanResponse(
         request_id=request_id,

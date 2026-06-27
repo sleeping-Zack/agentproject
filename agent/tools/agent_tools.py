@@ -1,4 +1,5 @@
 import json
+from dataclasses import asdict
 
 from utils.logger_handler import logger
 from langchain_core.tools import tool
@@ -12,6 +13,8 @@ from safety.security import (
     is_sensitive_tool_approved,
     require_sensitive_tool_confirmation,
 )
+from observability.context import request_context
+from observability.tracing import trace_recorder
 
 rag = RagSummarizeService()
 tool_data_service = ToolDataService(
@@ -29,7 +32,9 @@ def _require_allowed(tool_name: str) -> None:
 def rag_summarize(query: str) -> str:
     _require_allowed("rag_summarize")
     assert_safe_tool_arguments("rag_summarize", {"query": query})
-    return rag.rag_summarize(query)
+    result = rag.rag_summarize_result(query)
+    _record_rag_evidence(result)
+    return result.answer
 
 
 @tool(description="获取指定城市的天气，以消息字符串的形式返回")
@@ -76,3 +81,20 @@ def fetch_external_data(user_id: str, month: str) -> str:
 def fill_context_for_report():
     _require_allowed("fill_context_for_report")
     return "fill_context_for_report已调用"
+
+
+def _record_rag_evidence(result) -> None:
+    ctx = request_context()
+    if not ctx.request_id or not result.evidence:
+        return
+    evidence = [asdict(item) for item in result.evidence]
+    try:
+        with trace_recorder.span(
+            ctx.request_id,
+            category="rag",
+            name="evidence",
+            metadata={"evidence": evidence},
+        ):
+            pass
+    except KeyError:
+        return

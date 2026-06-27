@@ -50,7 +50,7 @@ class RagSummarizeService(object):
         self.prompt_text = load_rag_prompts()
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)
         self.model = chat_model
-        self.chain = self._init_chain()
+        self._chain = None
         self._semantic_cache = None
         if enable_semantic_cache and embed_model is not None:
             try:
@@ -65,6 +65,12 @@ class RagSummarizeService(object):
     def _init_chain(self):
         chain = self.prompt_template | self.model | StrOutputParser()
         return chain
+
+    @property
+    def chain(self):
+        if self._chain is None:
+            self._chain = self._init_chain()
+        return self._chain
 
     def retriever_docs(self, query: str) -> list[Document]:
         return self.retriever.invoke(query)

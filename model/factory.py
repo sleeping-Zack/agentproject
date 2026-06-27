@@ -44,5 +44,35 @@ class EmbeddingsFactory(BaseModelFactory):
 
 
 model_router: ModelRouter = build_default_router_from_config(rag_conf)
-chat_model = ChatModelFactory().generator()
-embed_model = EmbeddingsFactory().generator()
+
+_chat_model = None
+_embed_model = None
+
+
+def _get_chat_model():
+    global _chat_model
+    if _chat_model is None:
+        _chat_model = ChatModelFactory().generator()
+    return _chat_model
+
+
+def _get_embed_model():
+    global _embed_model
+    if _embed_model is None:
+        _embed_model = EmbeddingsFactory().generator()
+    return _embed_model
+
+
+class _LazyModel:
+    def __init__(self, getter):
+        object.__setattr__(self, "_getter", getter)
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_getter")(), name)
+
+    def __call__(self, *args, **kwargs):
+        return object.__getattribute__(self, "_getter")()(*args, **kwargs)
+
+
+chat_model = _LazyModel(_get_chat_model)
+embed_model = _LazyModel(_get_embed_model)

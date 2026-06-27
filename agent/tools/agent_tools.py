@@ -7,7 +7,11 @@ from utils.config_handler import agent_conf
 from utils.path_tool import get_abs_path
 from services.tool_data_service import ToolDataService
 from agent.tools.registry import build_default_tool_registry
-from safety.security import assert_safe_tool_arguments, require_sensitive_tool_confirmation
+from safety.security import (
+    assert_safe_tool_arguments,
+    is_sensitive_tool_approved,
+    require_sensitive_tool_confirmation,
+)
 
 rag = RagSummarizeService()
 tool_data_service = ToolDataService(
@@ -57,7 +61,10 @@ def get_current_month() -> str:
 def fetch_external_data(user_id: str, month: str) -> str:
     _require_allowed("fetch_external_data")
     assert_safe_tool_arguments("fetch_external_data", {"user_id": user_id, "month": month})
-    require_sensitive_tool_confirmation("fetch_external_data", confirmed=True)
+    require_sensitive_tool_confirmation(
+        "fetch_external_data",
+        confirmed=is_sensitive_tool_approved("fetch_external_data"),
+    )
     record = tool_data_service.fetch_external_data(user_id, month)
     if not record:
         logger.warning(f"[fetch_external_data]未能检索到用户：{user_id}在{month}的使用记录数据")

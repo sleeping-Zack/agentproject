@@ -38,7 +38,9 @@ class EvalGate:
             failures.append("keyword_recall_below_threshold")
         if latency.get("p95_ms", 0.0) > self.thresholds.max_p95_latency_ms:
             failures.append("p95_latency_above_threshold")
-        if cost.get("avg", 0.0) > self.thresholds.max_avg_cost:
+        if cost.get("mode") == "disabled":
+            failures.append("cost_disabled")
+        elif cost.get("avg", 0.0) > self.thresholds.max_avg_cost:
             failures.append("avg_cost_above_threshold")
 
         breakdown: Dict[str, Dict[str, int]] = {}

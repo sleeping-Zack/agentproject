@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import threading
 import time
 from typing import Dict, List, Optional
 from uuid import uuid4
@@ -15,23 +14,19 @@ from agent.runner import AgentRunner, AgentTask, ReactAgentBackend
 from agent.tools.agent_tools import (
     fetch_external_data,
     get_weather,
-    rag,
     rag_summarize,
-    tool_data_service,
     tool_registry,
 )
-from agent.workflows.report_workflow import ReportWorkflow
 from mcp_adapter.server import MCPToolServer
-from observability.event_bus import event_bus
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
 from rag.judge import LLMJudge, evaluate_batch
+from safety.auth import ADMIN_ROLES, AuthContext, resolve_auth_context
 from safety.security import UnsafeInputError, assert_safe_user_input
 from services.approval_store import SQLiteApprovalStore
 from services.artifact_store import SQLiteArtifactStore
 from services.persistence import SQLiteStore
 from services.rate_limit import RateLimiter
-from utils.streaming import get_final_response
 
 app = FastAPI(title="Sweeper Agent API", version="0.4.0")
 store = SQLiteStore(os.getenv("AGENT_DB_PATH", "storage/agent.db"))
@@ -54,7 +49,9 @@ mcp_server = MCPToolServer(
         "fetch_external_data": lambda args: fetch_external_data.invoke(
             {"user_id": args["user_id"], "month": args["month"]}
         ),
-    }
+    },
+    policy=harness_runner.policy,
+    approval_store=approval_store,
 )
 
 
@@ -70,6 +67,8 @@ class ChatResponse(BaseModel):
     session_id: str
     answer: str
     trace_url: str
+    status: str = "completed"
+    approval_id: Optional[str] = None
 
 
 class PlanRequest(BaseModel):
@@ -128,6 +127,26 @@ def _authorize(api_key: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="invalid api key")
 
 
+def _auth_context(
+    api_key: Optional[str],
+    header_tenant_id: Optional[str] = None,
+    header_user_role: Optional[str] = None,
+    header_principal_id: Optional[str] = None,
+    body_tenant_id: Optional[str] = None,
+) -> AuthContext:
+    _authorize(api_key)
+    try:
+        return resolve_auth_context(
+            api_key=api_key or "",
+            header_tenant_id=header_tenant_id,
+            header_user_role=header_user_role,
+            header_principal_id=header_principal_id,
+            body_tenant_id=body_tenant_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
 def _rate_limit(request: Request, tenant_id: str) -> None:
     """优先按 tenant 维度限流，匿名请求回退到 IP，避免单租户挤占其他租户配额。"""
     if tenant_id and tenant_id != "default":
@@ -140,7 +159,22 @@ def _rate_limit(request: Request, tenant_id: str) -> None:
 
 
 def _resolve_tenant(body_tenant: Optional[str], header_tenant: Optional[str]) -> str:
-    return body_tenant or header_tenant or "default"
+    return header_tenant or body_tenant or "default"
+
+
+def _require_approval_operator(context: AuthContext) -> None:
+    if context.user_role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="approval requires operator/admin role")
+
+
+def _load_tenant_approval(approval_id: str, tenant_id: str):
+    try:
+        approval = approval_store.get(approval_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="approval not found") from exc
+    if approval.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="approval not found")
+    return approval
 
 
 @app.get("/health")
@@ -169,45 +203,40 @@ async def chat(
     raw_request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
 ) -> ChatResponse:
-    _authorize(x_api_key)
-    tenant_id = _resolve_tenant(request.tenant_id, x_tenant_id)
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id, request.tenant_id)
+    tenant_id = auth.tenant_id
     _rate_limit(raw_request, tenant_id)
-    request_id = str(uuid4())
     try:
         assert_safe_user_input(request.message)
     except UnsafeInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    def _run() -> str:
-        if "报告" in request.message or "使用记录" in request.message:
-            trace_recorder.start_trace(request_id=request_id, session_id=request.session_id)
-            workflow = ReportWorkflow(tool_service=tool_data_service, rag_service=rag)
-            return workflow.run(request.message)["answer"]
-        chunks: List[str] = list(
-            agent.execute_stream(
-                request.message,
-                session_id=request.session_id,
-                request_id=request_id,
-                tenant_id=tenant_id,
-            )
-        )
-        return get_final_response(chunks)
-
-    # Agent / 模型调用是 CPU+IO 阻塞型，扔进默认 threadpool，避免阻塞事件循环
-    answer = await asyncio.to_thread(_run)
+    task = AgentTask(
+        query=request.message,
+        session_id=request.session_id,
+        tenant_id=tenant_id,
+        user_role=auth.user_role,
+        scene="default",
+    )
+    result = await asyncio.to_thread(harness_runner.run, task)
+    answer = result.answer
 
     store.save_session_message(request.session_id, "user", request.message,
                                 tenant_id=tenant_id)
     store.save_session_message(request.session_id, "assistant", answer,
                                 tenant_id=tenant_id)
-    trace_payload = trace_recorder.export_trace(request_id)
-    store.save_trace(request_id, request.session_id, trace_payload, tenant_id=tenant_id)
+    trace_payload = trace_recorder.export_trace(result.request_id)
+    store.save_trace(result.request_id, request.session_id, trace_payload, tenant_id=tenant_id)
     return ChatResponse(
-        request_id=request_id,
+        request_id=result.request_id,
         session_id=request.session_id,
         answer=answer,
-        trace_url=f"/traces/{request_id}",
+        trace_url=f"/traces/{result.request_id}",
+        status=result.state.status,
+        approval_id=result.approval_id,
     )
 
 
@@ -217,116 +246,56 @@ async def chat_stream(
     raw_request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
 ):
-    """Server-Sent Events stream of incremental Agent output."""
-    _authorize(x_api_key)
-    tenant_id = _resolve_tenant(request.tenant_id, x_tenant_id)
+    """Server-Sent Events facade over the harness-controlled execution path."""
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id, request.tenant_id)
+    tenant_id = auth.tenant_id
     _rate_limit(raw_request, tenant_id)
-    request_id = str(uuid4())
     try:
         assert_safe_user_input(request.message)
     except UnsafeInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def event_stream():
-        emitted: List[str] = []
-        previous = ""
-        ttft_recorded = False
         start_time = time.perf_counter()
-        last_emit = start_time
-        HEARTBEAT_INTERVAL = float(os.getenv("AGENT_SSE_HEARTBEAT_SECONDS", "15"))
-
-        # 在后台线程跑 Agent，主协程同时排空 message chunk 与 event_bus 中的 tool 事件
-        import queue as _queue
-        chunk_q: _queue.Queue = _queue.Queue()
-
-        def producer():
-            try:
-                for chunk in agent.execute_stream(
-                    request.message,
-                    session_id=request.session_id,
-                    request_id=request_id,
-                    tenant_id=tenant_id,
-                ):
-                    chunk_q.put(("chunk", chunk))
-            except Exception as exc:
-                chunk_q.put(("error", str(exc)))
-            finally:
-                chunk_q.put(("done", None))
-                event_bus.close(request_id)
-
-        producer_thread = threading.Thread(target=producer, daemon=True)
-        producer_thread.start()
-
-        done = False
-        while not done:
-            now = time.perf_counter()
-            if now - last_emit >= HEARTBEAT_INTERVAL:
-                yield "event: heartbeat\ndata: {}\n\n"
-                last_emit = now
-
-            event = event_bus.consume(request_id, timeout=0.2)
-            if event and event != "closed":
-                payload = json.dumps({"request_id": request_id, **event.data},
-                                     ensure_ascii=False)
-                yield f"event: {event.event}\ndata: {payload}\n\n"
-                last_emit = time.perf_counter()
-                continue
-
-            try:
-                kind, payload_raw = chunk_q.get_nowait()
-            except _queue.Empty:
-                continue
-
-            if kind == "error":
-                err = json.dumps({"request_id": request_id, "error": payload_raw},
-                                 ensure_ascii=False)
-                yield f"event: error\ndata: {err}\n\n"
-                done = True
-                break
-            if kind == "done":
-                done = True
-                break
-
-            chunk = payload_raw
-            emitted.append(chunk)
-            stripped = chunk.rstrip("\n")
-            delta = stripped[len(previous):] if stripped.startswith(previous) else stripped
-            previous = stripped
-            if not delta:
-                continue
-
-            if not ttft_recorded:
-                metrics_registry.observe_ttft((time.perf_counter() - start_time) * 1000)
-                ttft_recorded = True
-
-            payload = json.dumps(
-                {"request_id": request_id, "delta": delta, "full": stripped},
-                ensure_ascii=False,
-            )
-            yield f"event: answer\ndata: {payload}\n\n"
-            last_emit = time.perf_counter()
-
-        # 排空 event_bus 中可能晚到的事件
-        while True:
-            event = event_bus.consume(request_id, timeout=0.05)
-            if not event or event == "closed":
-                break
-            payload = json.dumps({"request_id": request_id, **event.data},
-                                 ensure_ascii=False)
-            yield f"event: {event.event}\ndata: {payload}\n\n"
-
-        final = get_final_response(emitted)
+        task = AgentTask(
+            query=request.message,
+            session_id=request.session_id,
+            tenant_id=tenant_id,
+            user_role=auth.user_role,
+            scene="default",
+        )
+        result = harness_runner.run(task)
+        metrics_registry.observe_ttft((time.perf_counter() - start_time) * 1000)
+        final = result.answer
+        answer_payload = json.dumps(
+            {
+                "request_id": result.request_id,
+                "delta": final,
+                "full": final,
+                "status": result.state.status,
+                "approval_id": result.approval_id,
+            },
+            ensure_ascii=False,
+        )
+        yield f"event: answer\ndata: {answer_payload}\n\n"
         store.save_session_message(request.session_id, "user", request.message,
                                     tenant_id=tenant_id)
         store.save_session_message(request.session_id, "assistant", final,
                                     tenant_id=tenant_id)
-        trace_payload = trace_recorder.export_trace(request_id)
-        store.save_trace(request_id, request.session_id, trace_payload,
+        trace_payload = trace_recorder.export_trace(result.request_id)
+        store.save_trace(result.request_id, request.session_id, trace_payload,
                          tenant_id=tenant_id)
         done_payload = json.dumps(
-            {"request_id": request_id, "answer": final,
-             "trace_url": f"/traces/{request_id}"},
+            {
+                "request_id": result.request_id,
+                "answer": final,
+                "status": result.state.status,
+                "approval_id": result.approval_id,
+                "trace_url": f"/traces/{result.request_id}",
+            },
             ensure_ascii=False,
         )
         yield f"event: done\ndata: {done_payload}\n\n"
@@ -375,9 +344,11 @@ async def harness_run(
     raw_request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
 ) -> HarnessRunResponse:
-    _authorize(x_api_key)
-    tenant_id = _resolve_tenant(request.tenant_id, x_tenant_id)
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id, request.tenant_id)
+    tenant_id = auth.tenant_id
     _rate_limit(raw_request, tenant_id)
     try:
         assert_safe_user_input(request.message)
@@ -388,7 +359,7 @@ async def harness_run(
         query=request.message,
         session_id=request.session_id,
         tenant_id=tenant_id,
-        user_role=request.user_role,
+        user_role=auth.user_role,
         scene=request.scene,
         approval_id=request.approval_id,
     )
@@ -413,14 +384,13 @@ async def get_approval(
     raw_request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
 ) -> Dict:
-    _authorize(x_api_key)
-    tenant_id = _resolve_tenant(None, x_tenant_id)
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    tenant_id = auth.tenant_id
     _rate_limit(raw_request, tenant_id)
-    try:
-        return approval_store.get(approval_id).__dict__
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="approval not found") from exc
+    return _load_tenant_approval(approval_id, tenant_id).__dict__
 
 
 @app.post("/approvals/{approval_id}/approve")
@@ -430,14 +400,15 @@ async def approve_approval(
     raw_request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
 ) -> Dict:
-    _authorize(x_api_key)
-    tenant_id = _resolve_tenant(None, x_tenant_id)
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_approval_operator(auth)
+    tenant_id = auth.tenant_id
     _rate_limit(raw_request, tenant_id)
-    try:
-        return approval_store.approve(approval_id, request.decided_by).__dict__
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="approval not found") from exc
+    _load_tenant_approval(approval_id, tenant_id)
+    return approval_store.approve(approval_id, auth.principal_id).__dict__
 
 
 @app.post("/approvals/{approval_id}/deny")
@@ -447,14 +418,15 @@ async def deny_approval(
     raw_request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
 ) -> Dict:
-    _authorize(x_api_key)
-    tenant_id = _resolve_tenant(None, x_tenant_id)
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_approval_operator(auth)
+    tenant_id = auth.tenant_id
     _rate_limit(raw_request, tenant_id)
-    try:
-        return approval_store.deny(approval_id, request.decided_by).__dict__
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="approval not found") from exc
+    _load_tenant_approval(approval_id, tenant_id)
+    return approval_store.deny(approval_id, auth.principal_id).__dict__
 
 
 @app.get("/artifacts/{request_id}")
@@ -469,6 +441,25 @@ async def list_artifacts(
     _rate_limit(raw_request, tenant_id)
     artifacts = artifact_store.list_artifacts(request_id, tenant_id=tenant_id)
     return {"artifacts": [artifact.__dict__ for artifact in artifacts]}
+
+
+@app.get("/artifact/{artifact_id}")
+async def get_artifact(
+    artifact_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+) -> Dict:
+    _authorize(x_api_key)
+    tenant_id = _resolve_tenant(None, x_tenant_id)
+    _rate_limit(raw_request, tenant_id)
+    try:
+        artifact = artifact_store.get_artifact(artifact_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="artifact not found") from exc
+    if artifact.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return {"artifact": artifact.__dict__}
 
 
 @app.post("/judge")
@@ -506,5 +497,14 @@ async def get_otel_trace(request_id: str) -> Dict:
 
 
 @app.post("/mcp")
-async def mcp_http(request: Dict) -> Dict:
-    return mcp_server.handle_jsonrpc(request)
+async def mcp_http(
+    request: Dict,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _rate_limit(raw_request, auth.tenant_id)
+    return mcp_server.handle_jsonrpc(request, context=auth)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
@@ -57,9 +58,26 @@ class ReactAgentBackend:
                 session_id=task.session_id,
                 request_id=task.request_id,
                 tenant_id=task.tenant_id,
+                user_role=task.user_role,
+                scene=task.scene,
+                approval_id=task.approval_id,
             )
         )
-        return AgentBackendResult(answer=get_final_response(chunks))
+        trace_payload = trace_recorder.export_trace(task.request_id)
+        tool_results = [
+            {
+                "tool": event["name"],
+                "status": "error" if event.get("error") else "success",
+                "metadata": event.get("metadata", {}),
+            }
+            for event in trace_payload.get("events", [])
+            if event.get("category") == "tool"
+        ]
+        return AgentBackendResult(
+            answer=get_final_response(chunks),
+            tool_results=tool_results,
+            model_name=type(getattr(self.agent, "agent", self.agent)).__name__,
+        )
 
 
 class AgentRunner:
@@ -77,6 +95,9 @@ class AgentRunner:
         max_tokens: int = 8000,
         max_cost: float = 1.0,
         max_verification_retries: int = 1,
+        estimated_cost_per_1k_tokens: float = float(
+            os.getenv("AGENT_ESTIMATED_COST_PER_1K_TOKENS", "0.001")
+        ),
     ) -> None:
         self.backend = backend or ReactAgentBackend()
         self.policy = policy or ToolPolicy()
@@ -88,10 +109,12 @@ class AgentRunner:
         self.max_tokens = max_tokens
         self.max_cost = max_cost
         self.max_verification_retries = max_verification_retries
+        self.estimated_cost_per_1k_tokens = estimated_cost_per_1k_tokens
 
     def run(self, task: AgentTask) -> AgentRunResult:
         self._ensure_trace(task.request_id, task.session_id)
         scene = self._resolve_scene(task)
+        task.scene = scene
         state = AgentState(
             request_id=task.request_id,
             session_id=task.session_id,
@@ -145,10 +168,44 @@ class AgentRunner:
                 )
             answer = backend_result.answer
             tool_results = backend_result.tool_results
+            tokens_in, tokens_out, cost = self._estimate_usage(task.query, answer)
+            state.budget.record_tokens(tokens_in + tokens_out)
+            state.budget.record_cost(cost)
+            if not state.budget.can_continue():
+                state.mark_blocked(state.budget.stop_reason() or "budget_exhausted")
+                self._record_diagnostic(
+                    state,
+                    "budget",
+                    "blocked",
+                    step_id=step.step_id,
+                    model_name=backend_result.model_name,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    cost=cost,
+                    failure_reason=state.error,
+                )
+                return self._result(state, state.error or "budget exhausted", verifier_result)
+            for tool_result in backend_result.tool_results:
+                if state.budget.can_continue():
+                    state.add_tool_call(
+                        ToolCallRecord(
+                            tool_name=str(tool_result.get("tool", "unknown")),
+                            args={},
+                            status=str(tool_result.get("status", "completed")),
+                            result=str(tool_result.get("content", ""))[:500],
+                        )
+                    )
+            if not state.budget.can_continue():
+                state.mark_blocked(state.budget.stop_reason() or "budget_exhausted")
+                return self._result(state, state.error or "budget exhausted", verifier_result)
+
             verifier_result = self.verifier.verify(
                 query=task.query,
                 answer=answer,
                 evidence=backend_result.evidence,
+                scene=scene,
+                tool_results=backend_result.tool_results,
+                artifacts=[artifact.__dict__ for artifact in state.artifacts],
             )
             self._record_diagnostic(
                 state,
@@ -159,6 +216,9 @@ class AgentRunner:
                 verifier=verifier_result.__dict__,
                 model_name=backend_result.model_name,
                 retry=attempt,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cost=cost,
             )
             if verifier_result.passed:
                 break
@@ -231,6 +291,12 @@ class AgentRunner:
         if decision.action == PolicyAction.NEED_APPROVAL:
             if task.approval_id:
                 approval = self.approval_store.get(task.approval_id)
+                if approval.tenant_id != task.tenant_id or approval.tool_name != "fetch_external_data":
+                    state.mark_rejected(
+                        "approval_mismatch",
+                        "请求未执行：审批记录与当前租户或工具不匹配。",
+                    )
+                    return self._result(state, state.final_answer or "", None)
                 if approval.is_approved:
                     state.add_tool_call(
                         ToolCallRecord(
@@ -352,6 +418,9 @@ class AgentRunner:
         verifier: Optional[Dict[str, Any]] = None,
         retry: int = 0,
         model_name: str = "",
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        cost: float = 0.0,
     ) -> None:
         trace_recorder.record_diagnostic_event(
             request_id=state.request_id,
@@ -366,4 +435,16 @@ class AgentRunner:
             prompt_version="harness:v1",
             model_name=model_name,
             failure_reason=failure_reason,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost=cost,
         )
+
+    def _estimate_usage(self, query: str, answer: str) -> tuple[int, int, float]:
+        tokens_in = max(1, (len(query) + 3) // 4)
+        tokens_out = max(1, (len(answer) + 3) // 4)
+        cost = round(
+            ((tokens_in + tokens_out) / 1000.0) * self.estimated_cost_per_1k_tokens,
+            6,
+        )
+        return tokens_in, tokens_out, cost

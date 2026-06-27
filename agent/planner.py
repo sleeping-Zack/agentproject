@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
@@ -230,26 +230,95 @@ class PlannerAgent:
         planner: Optional[TaskPlanner] = None,
         executor: Optional[PlanExecutor] = None,
         aggregator: Optional[ResultAggregator] = None,
+        validator: Optional[Any] = None,
+        replanner: Optional[Any] = None,
+        max_steps: int = 8,
+        max_replans: int = 1,
     ) -> None:
         self.planner = planner or TaskPlanner()
         self.executor = executor or PlanExecutor()
         self.aggregator = aggregator or ResultAggregator()
+        self.validator = validator
+        self.replanner = replanner
+        self.max_steps = max_steps
+        self.max_replans = max_replans
 
     def run(self, query: str, request_id: Optional[str] = None) -> PlanRunResult:
         if request_id:
             with trace_recorder.span(request_id, category="planner", name="plan"):
                 plan = self.planner.plan(query)
+                validation_error = self._validation_error(plan)
+                if validation_error:
+                    return PlanRunResult(plan=plan, results=[], answer=validation_error)
             with trace_recorder.span(
                 request_id, category="planner", name="execute",
                 metadata={"task_count": len(plan)},
             ):
                 results = self.executor.execute(plan)
+                plan, results = self._replan_failed(query, plan, results)
             with trace_recorder.span(request_id, category="planner", name="aggregate"):
                 answer = self.aggregator.aggregate(query, plan, results)
         else:
             plan = self.planner.plan(query)
+            validation_error = self._validation_error(plan)
+            if validation_error:
+                metrics_registry.inc_counter("agent_planner_runs_total")
+                return PlanRunResult(plan=plan, results=[], answer=validation_error)
             results = self.executor.execute(plan)
+            plan, results = self._replan_failed(query, plan, results)
             answer = self.aggregator.aggregate(query, plan, results)
 
         metrics_registry.inc_counter("agent_planner_runs_total")
         return PlanRunResult(plan=plan, results=results, answer=answer)
+
+    def _validation_error(self, plan: List[SubTask]) -> str:
+        if self.validator is None:
+            return ""
+        validation = self.validator.validate(plan, max_steps=self.max_steps)
+        if validation.valid:
+            return ""
+        return "计划被阻止：" + ",".join(validation.errors)
+
+    def _replan_failed(
+        self,
+        query: str,
+        plan: List[SubTask],
+        results: List[SubTaskResult],
+    ) -> tuple[List[SubTask], List[SubTaskResult]]:
+        if self.replanner is None or self.max_replans <= 0:
+            return plan, results
+        failed = [
+            (task, result)
+            for task, result in zip(plan, results)
+            if not result.success
+        ]
+        if not failed:
+            return plan, results
+
+        fallback_plan: List[SubTask] = []
+        for task, result in failed:
+            fallback_plan.extend(
+                self.replanner.replan(
+                    query=query,
+                    failed_task=task,
+                    failure_reason=result.error or "subtask_failed",
+                )
+            )
+        if not fallback_plan:
+            return plan, results
+        if self.validator is not None:
+            validation = self.validator.validate(
+                [*plan, *fallback_plan],
+                max_steps=self.max_steps,
+            )
+            if not validation.valid:
+                blocked = SubTaskResult(
+                    id="replan-blocked",
+                    kind="generic",
+                    success=False,
+                    content="",
+                    error="replan_blocked:" + ",".join(validation.errors),
+                )
+                return plan, [*results, blocked]
+        fallback_results = self.executor.execute(fallback_plan)
+        return [*plan, *fallback_plan], [*results, *fallback_results]

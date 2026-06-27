@@ -31,17 +31,37 @@ class AnswerVerifier:
         query: str,
         answer: str,
         evidence: List[Dict[str, Any]],
+        scene: str = "general",
+        tool_results: Optional[List[Dict[str, Any]]] = None,
+        artifacts: Optional[List[Dict[str, Any]]] = None,
     ) -> VerifyResult:
         reasons: List[str] = []
+        tool_results = tool_results or []
+        artifacts = artifacts or []
         context = "\n".join(str(item.get("content", "")) for item in evidence)
 
         citation_present = self._has_citation(answer, evidence)
+        if scene in {"rag", "rag_qa", "qa"}:
+            if not evidence:
+                reasons.append("evidence_required")
+            if not citation_present:
+                reasons.append("citation_missing")
+        if scene in {"report", "monthly_report"}:
+            has_report_artifact = any(
+                artifact.get("type") in {"usage_record", "report", "tool_results"}
+                or artifact.get("artifact_type") in {"usage_record", "report", "tool_results"}
+                for artifact in artifacts
+            )
+            if not tool_results and not has_report_artifact:
+                reasons.append("report_support_required")
         if self.require_citation and evidence and not citation_present:
             reasons.append("citation_missing")
         if evidence and not context.strip():
             reasons.append("evidence_empty")
         if not answer.strip():
             reasons.append("answer_empty")
+        if answer.strip().startswith("请求未执行") and scene == "general":
+            reasons.append("unexpected_refusal")
 
         score = JudgeScore(5.0, 5.0, 5.0, "judge disabled")
         if self.judge is not None:
@@ -57,7 +77,8 @@ class AnswerVerifier:
                 score=score.overall,
                 judge=score.to_dict(),
             )
-        action = "retry" if "judge_score_below_threshold" in reasons else "refuse"
+        retry_reasons = {"judge_score_below_threshold"}
+        action = "retry" if retry_reasons.intersection(reasons) else "refuse"
         return VerifyResult(
             passed=False,
             action=action,

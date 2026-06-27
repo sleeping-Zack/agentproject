@@ -6,8 +6,8 @@
 
 - RAG 知识库：从 `data/` 中的 PDF/TXT 构建 Chroma 向量库。
 - 多工具 Agent：支持知识库检索、天气、用户位置、用户 ID、当前月份、使用记录和报告上下文切换。
-- MCP 风格工具注册：导出工具 manifest，并通过 allowlist 控制工具权限。
-- 真 MCP 服务：支持 JSON-RPC `initialize`、`tools/list`、`tools/call`，可通过 stdio 或 HTTP 调用。
+- MCP 风格工具注册：导出工具 manifest，并通过 allowlist、`ToolPolicy` 和审批存储控制工具权限。
+- 真 MCP 服务：支持 JSON-RPC `initialize`、`tools/list`、`tools/call`，可通过 stdio 或 HTTP 调用；敏感工具不会直接绕过审批。
 - 可控数据服务：用户、城市、月份和天气从配置读取，避免随机输出。
 - 显式工作流：报告生成走 `ReportWorkflow`，减少纯 Prompt 编排的不确定性。
 - 安全与可观测：提示词注入拦截、RAG 注入检测、工具参数校验、敏感字段脱敏、请求/工具/RAG trace、OpenTelemetry 风格 span。
@@ -54,14 +54,24 @@ uvicorn api.server:app --host 0.0.0.0 --port 8000
 - `GET /health`
 - `GET /tools/manifest`
 - `POST /chat`
+- `POST /chat/stream`
 - `POST /harness/run`
 - `GET /approvals/{approval_id}`
 - `POST /approvals/{approval_id}/approve`
 - `POST /approvals/{approval_id}/deny`
 - `GET /artifacts/{request_id}`
+- `GET /artifact/{artifact_id}`
 - `POST /mcp`
 - `GET /traces/{request_id}`
 - `GET /traces/{request_id}/otel`
+
+入口关系：
+
+- `/harness/run` 是推荐的生产入口，返回 `status`、`approval_id`、artifact 和 verifier 结果。
+- `/chat` 保留兼容旧调用方，但内部已经调用 `AgentRunner`，不会绕过审批、artifact、trace 和 verifier。
+- `/chat/stream` 是 SSE 外观接口，当前以 harness 最终结果发送 `answer/done` 事件，不再直接跑旧 ReAct stream。
+- `/mcp tools/call` 由 `MCPToolServer` 先经过 `ToolPolicy`；调用 `fetch_external_data` 这类敏感工具时会返回 `pending_approval` 和 `approval_id`，审批通过且参数匹配后才执行。
+- `user_role` 不再信任请求 body，服务端从 `X-User-Role` 这类 auth header 中解析；`approve/deny` 需要 `operator` 或 `admin`。
 
 启动 MCP stdio server：
 
@@ -75,7 +85,7 @@ python mcp_server.py
 python -m pytest tests -q
 python scripts/evaluate_rag.py
 python scripts/evaluate_agent.py --dry-run
-python scripts/evaluate_agent.py --gate --report storage/agent_eval_report.json
+python scripts/evaluate_agent.py --mode harness --gate --report storage/agent_eval_report.json
 python scripts/benchmark_api.py --url http://127.0.0.1:8000/chat --api-key dev-api-key
 ```
 
@@ -145,17 +155,17 @@ flowchart TB
 
 第一个是 `app.py`，用于 Streamlit 演示界面。它在 `st.session_state` 中维护 `ReactAgent`、消息列表和 `session_id`，用户输入后调用 `ReactAgent.execute_stream()` 进行流式回答。
 
-第二个是 `api/server.py`，用于 FastAPI 服务化交付。服务中初始化了 `SQLiteStore`、`ReactAgent`、`RateLimiter` 和 `MCPToolServer`，并暴露 `/health`、`/tools/manifest`、`/chat`、`/chat/stream`、`/plan`、`/judge`、`/traces/{request_id}`、`/mcp` 等接口。
+第二个是 `api/server.py`，用于 FastAPI 服务化交付。服务中初始化了 `SQLiteStore`、`ReactAgent`、`AgentRunner`、`RateLimiter` 和 `MCPToolServer`，并暴露 `/health`、`/tools/manifest`、`/chat`、`/chat/stream`、`/harness/run`、`/approvals/*`、`/artifacts/{request_id}`、`/artifact/{artifact_id}`、`/plan`、`/judge`、`/traces/{request_id}`、`/mcp` 等接口。
 
 ---
 
 ## 3.2 接入与控制层：鉴权、限流、租户、安全
 
-FastAPI 的 `/chat` 接口会先做 API Key 鉴权，再解析租户 ID，然后按租户或 IP 维度限流，最后进行用户输入安全检查。
+FastAPI 的 `/chat`、`/chat/stream`、`/harness/run` 和 HTTP `/mcp` 都会先做 API Key 鉴权，再从 header/auth context 解析 `tenant_id/user_role/principal_id`，然后按租户或 IP 维度限流，最后进行用户输入安全检查。body 中的 `user_role` 只保留兼容字段，生产控制不信任它。
 
 限流器是一个轻量滑动窗口实现，用 `deque` 记录请求时间，超过窗口内最大请求数后拒绝。
 
-安全层主要在 `safety/security.py`，包括用户 Prompt Injection 检测、RAG 检索内容注入检测、工具参数正则校验、敏感工具确认、日志脱敏。
+安全层主要在 `safety/security.py` 和 `safety/auth.py`，包括用户 Prompt Injection 检测、RAG 检索内容注入检测、工具参数正则校验、敏感工具 approval context、日志脱敏和可信角色解析。
 
 ---
 
@@ -232,7 +242,7 @@ flowchart LR
 
 默认注册的工具包括 `rag_summarize`、`get_weather`、`get_user_location`、`get_user_id`、`get_current_month`、`fetch_external_data` 和 `fill_context_for_report`。
 
-工具中间件负责工具调用的工程控制：先做 allowlist 检查，再接入熔断器、trace span、SSE 事件、缓存、重试、指标统计。如果工具调用成功，会记录工具耗时；如果失败，会返回可被 Agent 继续推理的 `ToolMessage`，避免整条链路直接崩溃。
+工具中间件负责工具调用的工程控制：先做 allowlist 和 `ToolPolicy` 检查，再接入审批、超时、熔断器、trace span、SSE 事件、缓存、重试、指标统计。trace 中不保存原始工具参数，只保存 `args_hash` 和 `redacted_args`。如果敏感工具没有审批，会返回 `pending_approval`/拒绝类 `ToolMessage`，不会直接 invoke 原始工具函数。
 
 ---
 
@@ -327,9 +337,9 @@ flowchart TB
     Handlers --> Record["fetch_external_data"]
 ```
 
-MCP 适配层由 `MCPToolServer` 实现，支持 JSON-RPC 的 `initialize`、`tools/list` 和 `tools/call`。`tools/list` 返回工具 manifest，`tools/call` 根据工具名调用对应 handler。
+MCP 适配层由 `MCPToolServer` 实现，支持 JSON-RPC 的 `initialize`、`tools/list` 和 `tools/call`。`tools/list` 返回工具 manifest，`tools/call` 会先执行 `ToolPolicy`，只有 allow 或审批通过后才调用对应 handler。
 
-项目同时支持 stdio MCP 和 HTTP MCP。`mcp_server.py` 从标准输入逐行读取 JSON-RPC 请求，然后输出 JSON-RPC 响应；FastAPI 中的 `/mcp` 端点则直接调用同一套 `MCPToolServer.handle_jsonrpc()`。
+项目同时支持 stdio MCP 和 HTTP MCP。`mcp_server.py` 从标准输入逐行读取 JSON-RPC 请求，然后输出 JSON-RPC 响应；FastAPI 中的 `/mcp` 端点则调用同一套 `MCPToolServer.handle_jsonrpc()`，并传入 auth context。敏感工具返回示例：`{"status":"pending_approval","approval_id":"..."}`。
 
 ---
 
@@ -403,7 +413,7 @@ flowchart TB
     Metrics --> Snap["/metrics/snapshot JSON"]
 ```
 
-`TraceRecorder` 能记录 request、agent、tool、model 等 span，每个事件包括 category、name、started_at、duration_ms、metadata 和 error，并能导出 OpenTelemetry 风格 span。
+`TraceRecorder` 能记录 request、agent、tool、model 等 span，每个事件包括 category、name、started_at、duration_ms、metadata 和 error，并能导出 OpenTelemetry 风格 span。诊断事件会包含 step_id、status、tool、evidence_ids、verifier、retry、prompt_version、model_name、failure_reason、tokens/cost。
 
 `EventBus` 是请求级事件总线，工具中间件在工具调用前后发布 `tool_start/tool_end`，SSE 端点消费同一个 `request_id` 的事件，从而让前端知道 Agent 正在调用哪个工具。
 
@@ -476,7 +486,7 @@ flowchart LR
     Memory2 --> Resp["返回用户"]
 ```
 
-演示文档中给出的普通客服问答示例是 `/chat` 接口收到“主刷缠绕毛发怎么办？”，预期进入 Agent 链路，必要时调用 RAG 工具，并返回带引用来源的处理建议。
+演示文档中给出的普通客服问答示例是 `/chat` 接口收到“主刷缠绕毛发怎么办？”，预期先进入 `AgentRunner`，再调用 ReAct 后端；必要时调用 RAG 工具，并返回带引用来源的处理建议。
 
 ## 15.2 个人使用报告
 
@@ -493,7 +503,7 @@ flowchart LR
     Report --> Resp["返回用户"]
 ```
 
-`/chat` 中如果检测到消息包含“报告”或“使用记录”，会绕过普通 ReAct 链路，直接使用 `ReportWorkflow` 生成答案。
+`/chat` 和 `/harness/run` 中如果检测到消息包含“报告”或“使用记录”，会先由 `AgentRunner` 判断是否需要 `fetch_external_data`。普通用户会得到 `pending_approval`，operator/admin 或审批通过后才继续执行后端；因此报告链路不会绕过敏感工具审批。
 
 ---
 

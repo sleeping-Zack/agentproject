@@ -42,3 +42,19 @@ def test_eval_gate_passes_when_metrics_meet_thresholds():
 
     assert result.passed is True
     assert result.failures == []
+
+
+def test_eval_gate_fails_when_cost_is_disabled():
+    gate = EvalGate(EvalThresholds(min_pass_rate=0.8, min_tool_recall=0.7))
+
+    result = gate.evaluate(
+        {
+            "aggregate": {"pass_rate": 0.9, "tool_recall": 0.85},
+            "latency": {"p95_ms": 200},
+            "cost": {"avg": 0.0, "mode": "disabled"},
+            "cases": [],
+        }
+    )
+
+    assert result.passed is False
+    assert "cost_disabled" in result.failures

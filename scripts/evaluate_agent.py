@@ -138,6 +138,7 @@ def main() -> None:
                         default=int(os.getenv("CI_SMOKE_LIMIT", "3")))
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--report", help="写一份机读 JSON 报告到该路径")
+    parser.add_argument("--mode", choices=["react", "harness"], default="harness")
     parser.add_argument("--dry-run", action="store_true",
                         help="不实际跑 Agent，只校验 golden 文件格式（CI 默认）")
     parser.add_argument("--gate", action="store_true", help="启用质量门禁，未达阈值返回非 0")
@@ -161,18 +162,27 @@ def main() -> None:
         report = {
             "case_count": len(cases),
             "dry_run": True,
+            "mode": args.mode,
             "ids": [c["id"] for c in cases],
         }
         print(json.dumps(report, ensure_ascii=False))
         return
 
-    from agent.react_agent import ReactAgent
-    agent = ReactAgent()
+    if args.mode == "react":
+        from agent.react_agent import ReactAgent
+        agent = ReactAgent()
+    else:
+        from agent.runner import AgentRunner
+        agent = AgentRunner()
 
     started = time.time()
     results: List[CaseResult] = []
     for case in cases:
-        result = _evaluate_case(agent, case)
+        result = (
+            _evaluate_case(agent, case)
+            if args.mode == "react"
+            else _evaluate_case_harness(agent, case)
+        )
         results.append(result)
         if not args.quiet:
             print(json.dumps(
@@ -194,8 +204,7 @@ def main() -> None:
         "p50_ms": _percentile([r.latency_ms for r in results], 50),
         "p95_ms": _percentile([r.latency_ms for r in results], 95),
     }
-    # 真实 token/cost 由生产 trace 注入；离线评测默认按 0 处理，保证无 key 环境可跑。
-    cost = {"avg": 0.0}
+    cost = _summarize_cost(results)
     case_payload = [r.__dict__ for r in results]
     gate_result = EvalGate(
         EvalThresholds(
@@ -217,6 +226,7 @@ def main() -> None:
         "aggregate": aggregate,
         "latency": latency,
         "cost": cost,
+        "mode": args.mode,
         "gate": gate_result.__dict__,
         "cases": case_payload,
     }
@@ -238,6 +248,107 @@ def _avg(seq) -> float:
     if not seq:
         return 0.0
     return round(sum(float(x) for x in seq) / len(seq), 3)
+
+
+def _evaluate_case_harness(runner, case: Dict) -> CaseResult:
+    expected_tools = [t.get("name") for t in case.get("expected_tools", [])]
+    expected_keywords = case.get("expected_keywords", [])
+    expected_rejection = case.get("expected_rejection", False)
+    bucket = case.get("bucket", _infer_bucket(case))
+
+    from agent.runner import AgentTask
+    from uuid import uuid4
+
+    request_id = str(uuid4())
+    query = case["turns"][-1]["content"] if case.get("turns") else case["query"]
+    started = time.perf_counter()
+    try:
+        result = runner.run(
+            AgentTask(
+                query=query,
+                session_id=case["id"],
+                request_id=request_id,
+                tenant_id="eval",
+                user_role="user",
+                scene=bucket if bucket in {"rag", "report", "general"} else "general",
+            )
+        )
+        answer = result.answer
+    except Exception as exc:
+        return CaseResult(
+            id=case["id"], passed=False, tool_recall=0.0, keyword_recall=0.0,
+            rejected=None, bucket=bucket, latency_ms=_elapsed_ms(started),
+            error_type="exception", error=str(exc),
+            detail={"trace": traceback.format_exc()[-500:], "request_id": request_id},
+        )
+
+    rejected = result.state.status in {"rejected", "blocked", "pending_approval"} or (
+        answer.startswith("请求未执行") or "请求未执行" in answer
+    )
+    if expected_rejection:
+        return CaseResult(
+            id=case["id"], passed=rejected, tool_recall=1.0 if rejected else 0.0,
+            keyword_recall=1.0, rejected=rejected, bucket=bucket,
+            latency_ms=_elapsed_ms(started),
+            error_type=None if rejected else "expected_rejection_not_triggered",
+            detail={"answer_preview": answer[:120], "request_id": request_id},
+        )
+
+    actual_tools = [call.tool_name for call in result.state.tool_calls]
+    if expected_tools:
+        hits = sum(1 for tool in expected_tools if tool in actual_tools)
+        tool_recall = hits / len(expected_tools)
+    else:
+        tool_recall = 1.0
+
+    if expected_keywords:
+        kw_hits = sum(1 for kw in expected_keywords if kw in answer)
+        keyword_recall = kw_hits / len(expected_keywords)
+    else:
+        keyword_recall = 1.0
+
+    passed = tool_recall >= 0.5 and keyword_recall >= 0.5 and not rejected
+    return CaseResult(
+        id=case["id"], passed=passed, tool_recall=tool_recall,
+        keyword_recall=keyword_recall, rejected=rejected, bucket=bucket,
+        latency_ms=_elapsed_ms(started),
+        error_type=None if passed else _failure_type(tool_recall, keyword_recall),
+        detail={
+            "actual_tools": actual_tools,
+            "expected_tools": expected_tools,
+            "answer_preview": answer[:200],
+            "request_id": request_id,
+            "status": result.state.status,
+        },
+    )
+
+
+def _summarize_cost(results: List[CaseResult]) -> Dict[str, Any]:
+    costs: List[float] = []
+    token_totals: List[int] = []
+    for result in results:
+        request_id = result.detail.get("request_id")
+        if not request_id:
+            continue
+        try:
+            events = trace_recorder.export_trace(request_id)["events"]
+        except KeyError:
+            continue
+        for event in events:
+            metadata = event.get("metadata", {})
+            cost = float(metadata.get("cost") or 0.0)
+            tokens = int(metadata.get("tokens_in") or 0) + int(metadata.get("tokens_out") or 0)
+            if cost > 0:
+                costs.append(cost)
+            if tokens > 0:
+                token_totals.append(tokens)
+    if not costs and not token_totals:
+        return {"avg": 0.0, "mode": "disabled"}
+    return {
+        "avg": round(sum(costs) / len(results), 6) if results else 0.0,
+        "mode": "estimated",
+        "tokens_avg": round(sum(token_totals) / len(results), 3) if results else 0.0,
+    }
 
 
 def _elapsed_ms(started: float) -> float:

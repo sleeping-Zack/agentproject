@@ -15,6 +15,7 @@ from agent.planner import (
     SubTaskResult,
     TaskPlanner,
 )
+from agent.policies import PlanValidator, Replanner
 from agent.summarizer import ConversationSummarizer
 from agent.tools.agent_tools import (fetch_external_data, fill_context_for_report,
                                      get_current_month, get_user_id, get_user_location,
@@ -97,7 +98,13 @@ class ReactAgent:
         executor.register_handler("rag_qa", handle_rag)
         executor.register_handler("report", handle_report)
         executor.register_handler("generic", handle_generic)
-        return PlannerAgent(planner=TaskPlanner(), executor=executor)
+        return PlannerAgent(
+            planner=TaskPlanner(),
+            executor=executor,
+            validator=PlanValidator(),
+            replanner=Replanner(),
+            max_replans=1,
+        )
 
     def run_plan(self, query: str, request_id: Optional[str] = None,
                  tenant_id: str = "default") -> PlanRunResult:
@@ -113,7 +120,10 @@ class ReactAgent:
 
     def execute_stream(self, query: str, session_id: str = "default",
                        request_id: Optional[str] = None,
-                       tenant_id: str = "default"):
+                       tenant_id: str = "default",
+                       user_role: str = "user",
+                       scene: str = "default",
+                       approval_id: Optional[str] = None):
         request_id = request_id or str(uuid4())
         trace_recorder.start_trace(request_id=request_id, session_id=session_id)
         request_start = metrics_registry.now()
@@ -141,7 +151,9 @@ class ReactAgent:
                             input_dict,
                             stream_mode="values",
                             context={"report": False, "request_id": request_id,
-                                     "session_id": session_id, "tenant_id": tenant_id},
+                                     "session_id": session_id, "tenant_id": tenant_id,
+                                     "user_role": user_role, "scene": scene,
+                                     "approval_id": approval_id},
                     ):
                         latest_message = chunk["messages"][-1]
                         if latest_message.content:

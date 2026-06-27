@@ -6,6 +6,7 @@ from agent.planner import (
     SubTaskResult,
     TaskPlanner,
 )
+from agent.policies import PlanValidator, Replanner
 
 
 def test_planner_decomposes_compound_query():
@@ -93,3 +94,65 @@ def test_planner_agent_end_to_end_with_mock_handlers():
     assert result.answer
     assert any(r.kind == "weather" for r in result.results)
     assert any(r.kind == "rag_qa" for r in result.results)
+
+
+def test_planner_agent_blocks_invalid_plan_before_execution():
+    planner = TaskPlanner(
+        llm_planner=lambda query: [
+            SubTask(id="t1", kind="unknown", description="bad task"),
+        ]
+    )
+    executor = PlanExecutor(max_workers=1)
+    agent = PlannerAgent(
+        planner=planner,
+        executor=executor,
+        validator=PlanValidator(),
+        max_steps=8,
+    )
+
+    result = agent.run("执行非法计划")
+
+    assert result.results == []
+    assert "计划被阻止" in result.answer
+    assert "invalid_task_kind" in result.answer
+
+
+def test_planner_agent_replans_failed_subtask_once():
+    planner = TaskPlanner(
+        llm_planner=lambda query: [
+            SubTask(id="t1", kind="rag_qa", description="will fail", args={"query": query}),
+        ]
+    )
+    executor = PlanExecutor(max_workers=1)
+    executor.register_handler(
+        "rag_qa",
+        lambda task: SubTaskResult(
+            id=task.id,
+            kind=task.kind,
+            success=False,
+            content="",
+            error="retriever unavailable",
+        ),
+    )
+    executor.register_handler(
+        "generic",
+        lambda task: SubTaskResult(
+            id=task.id,
+            kind=task.kind,
+            success=True,
+            content="fallback answer",
+        ),
+    )
+    agent = PlannerAgent(
+        planner=planner,
+        executor=executor,
+        validator=PlanValidator(),
+        replanner=Replanner(),
+        max_replans=1,
+    )
+
+    result = agent.run("怎么保养滤网")
+
+    assert any(task.id == "fallback-1" for task in result.plan)
+    assert any(item.kind == "generic" and item.success for item in result.results)
+    assert "fallback answer" in result.answer

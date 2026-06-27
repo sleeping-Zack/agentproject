@@ -1,4 +1,8 @@
+import hashlib
+import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 
 class UnsafeInputError(ValueError):
@@ -28,6 +32,10 @@ TOOL_ARGUMENT_RULES = {
 }
 
 SENSITIVE_TOOLS = {"fetch_external_data"}
+_approved_sensitive_tools: ContextVar[frozenset[str]] = ContextVar(
+    "approved_sensitive_tools",
+    default=frozenset(),
+)
 
 SECRET_PATTERNS = [
     re.compile(r"(DASHSCOPE_API_KEY=)[^\s]+", re.IGNORECASE),
@@ -62,6 +70,25 @@ def assert_safe_tool_arguments(tool_name: str, arguments: dict) -> None:
 def require_sensitive_tool_confirmation(tool_name: str, confirmed: bool) -> None:
     if tool_name in SENSITIVE_TOOLS and not confirmed:
         raise PermissionError(f"敏感工具需要确认后才能调用：{tool_name}")
+
+
+def is_sensitive_tool_approved(tool_name: str) -> bool:
+    return tool_name in _approved_sensitive_tools.get()
+
+
+@contextmanager
+def sensitive_tool_approval(tool_name: str):
+    current = _approved_sensitive_tools.get()
+    token = _approved_sensitive_tools.set(frozenset({*current, tool_name}))
+    try:
+        yield
+    finally:
+        _approved_sensitive_tools.reset(token)
+
+
+def args_hash(arguments: dict) -> str:
+    payload = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def redact_sensitive(value):

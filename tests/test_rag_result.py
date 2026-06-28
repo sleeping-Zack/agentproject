@@ -14,7 +14,7 @@ class FakeChain:
 def test_rag_summarize_result_returns_structured_evidence(monkeypatch):
     service = RagSummarizeService.__new__(RagSummarizeService)
     service._semantic_cache = None
-    service.chain = FakeChain()
+    service._chain = FakeChain()
     docs = [
         Document(
             page_content="滤网每周清理",

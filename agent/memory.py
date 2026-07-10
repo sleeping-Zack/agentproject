@@ -15,7 +15,13 @@ from typing import Dict, List, Optional, Protocol
 class SessionStore(Protocol):
     def load_messages(self, session_id: str) -> List[Dict[str, str]]: ...
 
-    def append_message(self, session_id: str, role: str, content: str) -> None: ...
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        request_id: Optional[str] = None,
+    ) -> bool: ...
 
 
 class InMemorySessionStore:
@@ -23,17 +29,30 @@ class InMemorySessionStore:
 
     def __init__(self) -> None:
         self._messages: Dict[str, List[Dict[str, str]]] = {}
+        self._message_keys: set[tuple[str, str, str]] = set()
         self._lock = RLock()
 
     def load_messages(self, session_id: str) -> List[Dict[str, str]]:
         with self._lock:
             return deepcopy(self._messages.get(session_id, []))
 
-    def append_message(self, session_id: str, role: str, content: str) -> None:
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        request_id: Optional[str] = None,
+    ) -> bool:
         with self._lock:
+            key = (session_id, request_id, role)
+            if request_id is not None and key in self._message_keys:
+                return False
             self._messages.setdefault(session_id, []).append(
                 {"role": role, "content": content}
             )
+            if request_id is not None:
+                self._message_keys.add(key)
+            return True
 
 
 class ConversationMemory:
@@ -69,14 +88,63 @@ class ConversationMemory:
     def _key(session_id: str, tenant_id: str = "default") -> str:
         return f"{tenant_id}|{session_id}"
 
-    def add_message(self, session_id: str, role: str, content: str,
-                    tenant_id: str = "default") -> None:
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+    ) -> bool:
         key = self._key(session_id, tenant_id)
         with self._lock:
             cached = self._load_into_cache(key)
-            self.store.append_message(key, role, content)
+            inserted = self.store.append_message(
+                key,
+                role,
+                content,
+                request_id=request_id,
+            )
+            if inserted is False:
+                self._cache.pop(key, None)
+                return False
             cached.append({"role": role, "content": content})
             self._maybe_compress(key)
+            return True
+
+    def commit_turn(
+        self,
+        session_id: str,
+        request_id: str,
+        user_message: str,
+        assistant_message: str,
+        status: str,
+        tenant_id: str = "default",
+    ) -> None:
+        """Persist one final conversation turn after Runner state is known.
+
+        Pending and failed runs are intentionally not committed: they do not
+        have a final assistant answer.  ``request_id`` makes retries idempotent
+        in both the persistent store and this process' hot cache.
+        """
+        if status not in {"completed", "rejected"} or not assistant_message.strip():
+            return
+        if not request_id:
+            raise ValueError("request_id is required when committing a conversation turn")
+        self.add_message(
+            session_id,
+            "user",
+            user_message,
+            tenant_id=tenant_id,
+            request_id=request_id,
+        )
+        self.add_message(
+            session_id,
+            "assistant",
+            assistant_message,
+            tenant_id=tenant_id,
+            request_id=request_id,
+        )
 
     def get_messages(self, session_id: str,
                      tenant_id: str = "default") -> List[Dict[str, str]]:

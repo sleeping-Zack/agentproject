@@ -1,0 +1,61 @@
+version: tool-policy-v1
+
+# Rules are evaluated by descending priority. File order breaks equal-priority
+# ties, and the first matching rule wins. No match is always a deny.
+default:
+  action: deny
+  reason_code: default_deny
+  reason: no matching tool policy rule
+
+rules:
+  - id: report-data-admin
+    priority: 300
+    match:
+      tenants: ["*"]
+      roles: [admin, operator]
+      scenes: [report, monthly_report]
+      tools: [fetch_external_data]
+      data_scopes: [usage_record:read]
+      risk_levels: [medium]
+    action: allow
+    requires_approval: false
+    reason_code: report_data_admin
+    reason: allowed
+
+  - id: report-data-user-approval
+    priority: 200
+    match:
+      tenants: ["*"]
+      roles: [user]
+      scenes: [report, monthly_report]
+      tools: [fetch_external_data]
+      data_scopes: [usage_record:read]
+      risk_levels: [medium]
+    action: allow
+    requires_approval: true
+    reason_code: report_data_requires_approval
+    reason: "tool requires approval: fetch_external_data"
+
+  - id: standard-tools
+    priority: 100
+    match:
+      tenants: ["*"]
+      roles: [user, operator, admin]
+      scenes: ["*"]
+      tools:
+        - rag_summarize
+        - get_weather
+        - get_user_location
+        - get_user_id
+        - get_current_month
+        - fill_context_for_report
+      data_scopes:
+        - knowledge:read
+        - environment:read
+        - user:read
+        - time:read
+        - runtime:write
+      risk_levels: [low]
+    action: allow
+    reason_code: standard_tool_allowed
+    reason: allowed

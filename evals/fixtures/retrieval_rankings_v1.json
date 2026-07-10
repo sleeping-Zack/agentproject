@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "description": "人工可计算的冻结排名，只用于PR级指标与基线回归；不代表线上模型质量。",
+  "rankings": {
+    "dense_only": {
+      "retrieval-001": ["decoy-001-a", "decoy-001-b", "decoy-001-c", "decoy-001-d", "6d726f4604d9e7ebcf59a932ae9e9c00:11", "decoy-001-e", "decoy-001-f", "decoy-001-g", "decoy-001-h", "decoy-001-i"],
+      "retrieval-002": ["decoy-002-a", "decoy-002-b", "decoy-002-c", "decoy-002-d", "decoy-002-e", "fc539588792a89ff842cf241cf822de1:49", "a29a4ba5a539a2a462def8f91eb98ccc:4", "decoy-002-f", "decoy-002-g", "decoy-002-h"],
+      "retrieval-003": ["decoy-003-a", "6d726f4604d9e7ebcf59a932ae9e9c00:21", "decoy-003-b", "decoy-003-c", "decoy-003-d", "decoy-003-e", "decoy-003-f", "decoy-003-g", "decoy-003-h", "decoy-003-i"],
+      "retrieval-004": ["a29a4ba5a539a2a462def8f91eb98ccc:1", "decoy-004-a", "decoy-004-b", "decoy-004-c", "decoy-004-d", "decoy-004-e", "decoy-004-f", "decoy-004-g", "decoy-004-h", "decoy-004-i"],
+      "retrieval-005": ["decoy-005-a", "decoy-005-b", "decoy-005-c", "decoy-005-d", "decoy-005-e", "decoy-005-f", "6d726f4604d9e7ebcf59a932ae9e9c00:4", "decoy-005-g", "decoy-005-h", "decoy-005-i"],
+      "retrieval-006": ["decoy-006-a", "6d726f4604d9e7ebcf59a932ae9e9c00:0", "decoy-006-b", "decoy-006-c", "decoy-006-d", "decoy-006-e", "decoy-006-f", "decoy-006-g", "decoy-006-h", "decoy-006-i"],
+      "retrieval-007": ["decoy-007-a", "decoy-007-b", "decoy-007-c", "6d726f4604d9e7ebcf59a932ae9e9c00:10", "decoy-007-d", "decoy-007-e", "decoy-007-f", "decoy-007-g", "decoy-007-h", "decoy-007-i"],
+      "retrieval-008": ["decoy-008-a", "decoy-008-b", "6d726f4604d9e7ebcf59a932ae9e9c00:1", "decoy-008-c", "decoy-008-d", "decoy-008-e", "decoy-008-f", "decoy-008-g", "decoy-008-h", "decoy-008-i"]
+    },
+    "hybrid": {
+      "retrieval-001": ["decoy-001-a", "6d726f4604d9e7ebcf59a932ae9e9c00:11", "decoy-001-b", "decoy-001-c", "decoy-001-d"],
+      "retrieval-002": ["decoy-002-a", "fc539588792a89ff842cf241cf822de1:49", "decoy-002-b", "a29a4ba5a539a2a462def8f91eb98ccc:4", "decoy-002-c"],
+      "retrieval-003": ["6d726f4604d9e7ebcf59a932ae9e9c00:21", "decoy-003-a", "decoy-003-b", "decoy-003-c", "decoy-003-d"],
+      "retrieval-004": ["a29a4ba5a539a2a462def8f91eb98ccc:1", "decoy-004-a", "decoy-004-b", "decoy-004-c", "decoy-004-d"],
+      "retrieval-005": ["decoy-005-a", "decoy-005-b", "decoy-005-c", "6d726f4604d9e7ebcf59a932ae9e9c00:4", "decoy-005-d"],
+      "retrieval-006": ["6d726f4604d9e7ebcf59a932ae9e9c00:0", "decoy-006-a", "decoy-006-b", "decoy-006-c", "decoy-006-d"],
+      "retrieval-007": ["decoy-007-a", "6d726f4604d9e7ebcf59a932ae9e9c00:10", "decoy-007-b", "decoy-007-c", "decoy-007-d"],
+      "retrieval-008": ["decoy-008-a", "6d726f4604d9e7ebcf59a932ae9e9c00:1", "decoy-008-b", "decoy-008-c", "decoy-008-d"]
+    },
+    "hybrid_rerank": {
+      "retrieval-001": ["6d726f4604d9e7ebcf59a932ae9e9c00:11", "decoy-001-a", "decoy-001-b", "decoy-001-c", "decoy-001-d"],
+      "retrieval-002": ["fc539588792a89ff842cf241cf822de1:49", "a29a4ba5a539a2a462def8f91eb98ccc:4", "decoy-002-a", "decoy-002-b", "decoy-002-c"],
+      "retrieval-003": ["6d726f4604d9e7ebcf59a932ae9e9c00:21", "decoy-003-a", "decoy-003-b", "decoy-003-c", "decoy-003-d"],
+      "retrieval-004": ["a29a4ba5a539a2a462def8f91eb98ccc:1", "decoy-004-a", "decoy-004-b", "decoy-004-c", "decoy-004-d"],
+      "retrieval-005": ["6d726f4604d9e7ebcf59a932ae9e9c00:4", "decoy-005-a", "decoy-005-b", "decoy-005-c", "decoy-005-d"],
+      "retrieval-006": ["6d726f4604d9e7ebcf59a932ae9e9c00:0", "decoy-006-a", "decoy-006-b", "decoy-006-c", "decoy-006-d"],
+      "retrieval-007": ["6d726f4604d9e7ebcf59a932ae9e9c00:10", "decoy-007-a", "decoy-007-b", "decoy-007-c", "decoy-007-d"],
+      "retrieval-008": ["6d726f4604d9e7ebcf59a932ae9e9c00:1", "decoy-008-a", "decoy-008-b", "decoy-008-c", "decoy-008-d"]
+    }
+  }
+}

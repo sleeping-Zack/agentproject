@@ -1,7 +1,7 @@
 import json
 import os
 import sqlite3
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class SQLiteStore:
@@ -22,6 +22,7 @@ class SQLiteStore:
                 "id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 "session_id TEXT NOT NULL,"
                 "tenant_id TEXT NOT NULL DEFAULT 'default',"
+                "request_id TEXT,"
                 "role TEXT NOT NULL,"
                 "content TEXT NOT NULL,"
                 "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
@@ -36,11 +37,16 @@ class SQLiteStore:
             )
             self._ensure_column(conn, "session_messages", "tenant_id",
                                 "TEXT NOT NULL DEFAULT 'default'")
+            self._ensure_column(conn, "session_messages", "request_id", "TEXT")
             self._ensure_column(conn, "traces", "tenant_id",
                                 "TEXT NOT NULL DEFAULT 'default'")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_session_messages_tenant_session "
                 "ON session_messages(tenant_id, session_id)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_session_message_idempotency "
+                "ON session_messages(tenant_id, session_id, request_id, role)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_traces_tenant "
@@ -53,14 +59,23 @@ class SQLiteStore:
         if column not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
-    def save_session_message(self, session_id: str, role: str, content: str,
-                             tenant_id: str = "default") -> None:
+    def save_session_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+    ) -> bool:
         with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO session_messages(session_id, tenant_id, role, content) "
-                "VALUES (?, ?, ?, ?)",
-                (session_id, tenant_id, role, content),
+            cursor = conn.execute(
+                "INSERT INTO session_messages("
+                "session_id, tenant_id, request_id, role, content) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(tenant_id, session_id, request_id, role) DO NOTHING",
+                (session_id, tenant_id, request_id, role, content),
             )
+        return cursor.rowcount == 1
 
     def get_session_messages(self, session_id: str,
                              tenant_id: str = "default") -> List[Dict[str, str]]:
@@ -77,9 +92,21 @@ class SQLiteStore:
         sid, tid = _split_tenant_session(session_id)
         return self.get_session_messages(sid, tenant_id=tid)
 
-    def append_message(self, session_id: str, role: str, content: str) -> None:
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        request_id: Optional[str] = None,
+    ) -> bool:
         sid, tid = _split_tenant_session(session_id)
-        self.save_session_message(sid, role, content, tenant_id=tid)
+        return self.save_session_message(
+            sid,
+            role,
+            content,
+            tenant_id=tid,
+            request_id=request_id,
+        )
 
     def save_trace(self, request_id: str, session_id: str, payload: Dict,
                    tenant_id: str = "default") -> None:

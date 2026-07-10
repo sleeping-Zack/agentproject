@@ -37,6 +37,7 @@ harness_runner = AgentRunner(
     backend=ReactAgentBackend(agent=agent),
     approval_store=approval_store,
     artifact_store=artifact_store,
+    conversation_memory=agent.memory,
 )
 rate_limiter = RateLimiter(
     max_requests=int(os.getenv("AGENT_RATE_LIMIT_REQUESTS", "60")),
@@ -224,10 +225,6 @@ async def chat(
     result = await asyncio.to_thread(harness_runner.run, task)
     answer = result.answer
 
-    store.save_session_message(request.session_id, "user", request.message,
-                                tenant_id=tenant_id)
-    store.save_session_message(request.session_id, "assistant", answer,
-                                tenant_id=tenant_id)
     trace_payload = trace_recorder.export_trace(result.request_id)
     store.save_trace(result.request_id, request.session_id, trace_payload, tenant_id=tenant_id)
     return ChatResponse(
@@ -281,10 +278,6 @@ async def chat_stream(
             ensure_ascii=False,
         )
         yield f"event: answer\ndata: {answer_payload}\n\n"
-        store.save_session_message(request.session_id, "user", request.message,
-                                    tenant_id=tenant_id)
-        store.save_session_message(request.session_id, "assistant", final,
-                                    tenant_id=tenant_id)
         trace_payload = trace_recorder.export_trace(result.request_id)
         store.save_trace(result.request_id, request.session_id, trace_payload,
                          tenant_id=tenant_id)

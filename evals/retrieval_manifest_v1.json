@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "corpus_version": "v1",
+  "corpus_hash": "20157ae1d0a3eab61697872600959b472841fdc256963b29e6e8a7c62fefb57e",
+  "chunk_config": {
+    "chunk_version": "v2",
+    "chunk_size": 200,
+    "chunk_overlap": 20
+  },
+  "embedding_model": "text-embedding-v4",
+  "retrieval_version": "hybrid-rrf-v1",
+  "label_scale": {
+    "0": "irrelevant",
+    "1": "related_but_not_answering",
+    "2": "partially_relevant",
+    "3": "directly_relevant"
+  },
+  "split_seed": 20260710,
+  "source_files": {
+    "data/扫地机器人100问.pdf": "f9ee0fea506436d8ea4a5ac6e1c272191023f41e95b677842e527f57745b4eb8",
+    "data/扫地机器人100问2.txt": "57ae8d6f93bbca9a4df5bfdd0a5fb301874404a611af33e5fcce3127d5cf0a0b",
+    "data/扫拖一体机器人100问.txt": "ad8af64df453a7bf3d614473cd66ce530ce707f4cacf549b90cb447889dccebc",
+    "data/故障排除.txt": "a954122a615861d62c74909d84a2f3a61f157d9bf5affa3c5f8ecd28998b84ad",
+    "data/维护保养.txt": "a5159f149789988fb6bb1dd619f0060a84f436746fc32fafb0a2e0e3a39fa23a",
+    "data/选购指南.txt": "e06bb351f6ade02ba52590d98867a6a39a9882524413150b2cc207ace270f726"
+  }
+}

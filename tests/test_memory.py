@@ -79,3 +79,41 @@ def test_conversation_memory_isolates_tenants():
     b = memory.get_messages("s1", tenant_id="tenant-b")
     assert len(a) == 1 and a[0]["content"] == "tenant a 的消息"
     assert len(b) == 1 and b[0]["content"] == "tenant b 的消息"
+
+
+def test_conversation_memory_commits_final_turn_once_per_request():
+    memory = ConversationMemory()
+
+    for _ in range(2):
+        memory.commit_turn(
+            session_id="s1",
+            request_id="req-1",
+            user_message="怎么清理主刷",
+            assistant_message="先关闭电源，再清理主刷。",
+            status="completed",
+            tenant_id="tenant-a",
+        )
+
+    assert memory.get_messages("s1", tenant_id="tenant-a") == [
+        {"role": "user", "content": "怎么清理主刷"},
+        {"role": "assistant", "content": "先关闭电源，再清理主刷。"},
+    ]
+
+
+def test_conversation_memory_only_commits_completed_or_rejected_turns():
+    memory = ConversationMemory()
+
+    memory.commit_turn(
+        "pending", "req-pending", "生成报告", "等待审批", "pending_approval"
+    )
+    memory.commit_turn("failed", "req-failed", "生成报告", "内部错误", "failed")
+    memory.commit_turn(
+        "rejected", "req-rejected", "危险操作", "请求未执行：该操作不安全。", "rejected"
+    )
+
+    assert memory.get_messages("pending") == []
+    assert memory.get_messages("failed") == []
+    assert memory.get_messages("rejected") == [
+        {"role": "user", "content": "危险操作"},
+        {"role": "assistant", "content": "请求未执行：该操作不安全。"},
+    ]

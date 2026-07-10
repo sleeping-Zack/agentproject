@@ -162,16 +162,12 @@ class ReactAgent:
                         if latest_message.content:
                             latest_response = latest_message.content.strip() + "\n"
                             yield latest_response
-            except Exception as exc:
+            except Exception:
                 metrics_registry.inc_request(status="error")
                 metrics_registry.observe_request_latency(metrics_registry.elapsed_ms(request_start))
-                yield f"Agent 运行失败：{exc}\n"
-                return
+                raise
 
             if latest_response:
-                self.memory.add_message(session_id, "user", query, tenant_id=tenant_id)
-                self.memory.add_message(session_id, "assistant", latest_response.strip(),
-                                        tenant_id=tenant_id)
                 metrics_registry.inc_request(status="success")
             else:
                 metrics_registry.inc_request(status="empty")

@@ -17,6 +17,8 @@ from rag.schemas import RetrievalCandidate
 
 
 def rrf_score(rank: int, k: int = 60) -> float:
+    if rank < 1 or k < 0:
+        raise ValueError("RRF rank must be >= 1 and k must be >= 0")
     return 1.0 / (k + rank)
 
 
@@ -36,6 +38,7 @@ def fuse_rrf(
                     dense_score=cand.dense_score,
                     sparse_score=cand.sparse_score,
                     fusion_score=0.0,
+                    meta=dict(cand.meta),
                 )
                 fused[cand.doc_id] = existing
             else:
@@ -43,8 +46,18 @@ def fuse_rrf(
                     existing.dense_score = max(existing.dense_score or 0.0, cand.dense_score)
                 if cand.sparse_score is not None:
                     existing.sparse_score = max(existing.sparse_score or 0.0, cand.sparse_score)
+            retrieved_by = set(existing.meta.get("retrieved_by") or [])
+            retrieved_by.update(cand.meta.get("retrieved_by") or [])
+            existing.meta["retrieved_by"] = sorted(retrieved_by)
+            if cand.dense_score is not None:
+                existing.meta["dense_rank"] = rank
+            if cand.sparse_score is not None:
+                existing.meta["bm25_rank"] = rank
             existing.fusion_score = (existing.fusion_score or 0.0) + rrf_score(rank, k=k)
-    return sorted(fused.values(), key=lambda c: c.fusion_score or 0.0, reverse=True)
+    ranked = sorted(fused.values(), key=lambda c: (-(c.fusion_score or 0.0), c.doc_id))
+    for rank, candidate in enumerate(ranked, start=1):
+        candidate.meta["hybrid_rank"] = rank
+    return ranked
 
 
 class HybridRetriever:
@@ -69,7 +82,9 @@ class HybridRetriever:
         self.final_k = final_k
 
     def retrieve(self, query: str, top_k: Optional[int] = None) -> List[RetrievalCandidate]:
-        top_k = top_k or self.final_k
+        top_k = self.final_k if top_k is None else top_k
+        if top_k <= 0:
+            return []
 
         dense_candidates = self.dense.retrieve(query, k=self.dense_k)
         bm25_candidates: List[RetrievalCandidate] = []
@@ -82,10 +97,18 @@ class HybridRetriever:
             fused = list(dense_candidates)
             for rank, cand in enumerate(fused, start=1):
                 cand.fusion_score = rrf_score(rank, k=self.rrf_k)
+                cand.meta.setdefault("dense_rank", rank)
+                cand.meta.setdefault("retrieved_by", ["dense"])
+                cand.meta["hybrid_rank"] = rank
 
         if self.reranker is not None and fused:
             head = fused[: self.rerank_top_n]
-            reranked = self.reranker.rerank(query, head)
+            reranked = self.reranker.rerank(query, head, top_n=len(head))
+            # 防御第三方 reranker 违反接口、只返回前 N 条时静默吞候选。
+            reranked_ids = {candidate.doc_id for candidate in reranked}
+            reranked.extend(candidate for candidate in head if candidate.doc_id not in reranked_ids)
+            for rank, candidate in enumerate(reranked, start=1):
+                candidate.meta["rerank_rank"] = rank
             tail = fused[self.rerank_top_n :]
             return (reranked + tail)[:top_k]
 

@@ -1,0 +1,8 @@
+{"id":"retrieval-001","query":"滚刷缠绕毛发如何处理","relevant_doc_ids":["6d726f4604d9e7ebcf59a932ae9e9c00:11"],"relevance":{"6d726f4604d9e7ebcf59a932ae9e9c00:11":3},"split":"dev"}
+{"id":"retrieval-002","query":"扫地机器人吸力下降怎么处理","relevant_doc_ids":["fc539588792a89ff842cf241cf822de1:49","a29a4ba5a539a2a462def8f91eb98ccc:4"],"relevance":{"fc539588792a89ff842cf241cf822de1:49":3,"a29a4ba5a539a2a462def8f91eb98ccc:4":2},"split":"test"}
+{"id":"retrieval-003","query":"HEPA滤网应该多久更换","relevant_doc_ids":["6d726f4604d9e7ebcf59a932ae9e9c00:21"],"relevance":{"6d726f4604d9e7ebcf59a932ae9e9c00:21":3},"split":"dev"}
+{"id":"retrieval-004","query":"APP无法连接扫地机器人怎么办","relevant_doc_ids":["a29a4ba5a539a2a462def8f91eb98ccc:1"],"relevance":{"a29a4ba5a539a2a462def8f91eb98ccc:1":3},"split":"test"}
+{"id":"retrieval-005","query":"扫地机器人最大能越过多高的门槛","relevant_doc_ids":["6d726f4604d9e7ebcf59a932ae9e9c00:4"],"relevance":{"6d726f4604d9e7ebcf59a932ae9e9c00:4":3},"split":"dev"}
+{"id":"retrieval-006","query":"扫地机器人如何实现自主导航","relevant_doc_ids":["6d726f4604d9e7ebcf59a932ae9e9c00:0"],"relevance":{"6d726f4604d9e7ebcf59a932ae9e9c00:0":3},"split":"test"}
+{"id":"retrieval-007","query":"尘盒多久清理一次","relevant_doc_ids":["6d726f4604d9e7ebcf59a932ae9e9c00:10"],"relevance":{"6d726f4604d9e7ebcf59a932ae9e9c00:10":3},"split":"dev"}
+{"id":"retrieval-008","query":"扫地机器人为什么会迷路","relevant_doc_ids":["6d726f4604d9e7ebcf59a932ae9e9c00:1"],"relevance":{"6d726f4604d9e7ebcf59a932ae9e9c00:1":3},"split":"test"}

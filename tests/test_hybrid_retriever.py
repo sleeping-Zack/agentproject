@@ -87,3 +87,28 @@ def test_hybrid_applies_reranker_only_on_head():
     result = hybrid.retrieve("q")
     # 前 2 个被 rerank 反转成 [B, A]，C 保持在末尾
     assert [c.doc_id for c in result] == ["B", "A", "C"]
+
+
+def test_hybrid_never_drops_head_candidates_when_reranker_returns_subset():
+    dense = _StubDense([_cand(str(index), dense=1.0 - index / 100) for index in range(25)])
+
+    class TruncatingReranker:
+        def rerank(self, query, candidates, top_n=5):
+            # 模拟旧 BGE 默认只返回 5 条的行为。
+            return list(candidates[:5])
+
+    hybrid = HybridRetriever(
+        dense=dense,
+        bm25=None,
+        reranker=TruncatingReranker(),
+        rerank_top_n=20,
+        final_k=10,
+    )
+
+    result = hybrid.retrieve("q")
+    assert [candidate.doc_id for candidate in result] == [str(index) for index in range(10)]
+
+
+def test_hybrid_top_k_zero_returns_no_candidates():
+    hybrid = HybridRetriever(dense=_StubDense([_cand("A", dense=0.9)]), final_k=1)
+    assert hybrid.retrieve("q", top_k=0) == []

@@ -69,6 +69,25 @@ def test_semantic_cache_hits_above_threshold():
     assert cache.get("扫地机器人电池能用多久") is None
 
 
+def test_semantic_cache_namespace_isolation_respects_lru():
+    cache = SemanticCache(
+        embedder=lambda _: [1.0, 0.0],
+        threshold=0.95,
+        max_entries=2,
+        ttl=10,
+    )
+    cache.set("怎么保养滤网", "tenant-a", namespace={"tenant_id": "a"})
+    cache.set("怎么保养滤网", "tenant-b", namespace={"tenant_id": "b"})
+
+    assert cache.get("怎么保养滤网", namespace={"tenant_id": "a"}) == "tenant-a"
+
+    cache.set("如何更换主刷", "tenant-c", namespace={"tenant_id": "c"})
+
+    assert cache.get("怎么保养滤网", namespace={"tenant_id": "a"}) == "tenant-a"
+    assert cache.get("怎么保养滤网", namespace={"tenant_id": "b"}) is None
+    assert cache.get("如何更换主刷", namespace={"tenant_id": "c"}) == "tenant-c"
+
+
 def _counter_value(name: str, labels: dict) -> float:
     key = (name, tuple(sorted(labels.items())))
     return metrics_registry._counters.get(key, 0.0)

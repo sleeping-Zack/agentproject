@@ -61,6 +61,10 @@ class MemoryCache:
         with self._lock:
             self._store.clear()
 
+    def keys(self) -> List[str]:
+        with self._lock:
+            return list(self._store.keys())
+
     def __len__(self) -> int:
         with self._lock:
             return len(self._store)
@@ -113,9 +117,6 @@ class SemanticCache:
         self.ttl = ttl
         self.name = name
         self._memory = MemoryCache(max_entries=max_entries, default_ttl=ttl)
-        # 同时维护一个 key 列表，便于遍历比较
-        self._keys: List[str] = []
-        self._lock = RLock()
 
     def _embed(self, query: str) -> Optional[List[float]]:
         try:
@@ -123,18 +124,45 @@ class SemanticCache:
         except Exception:
             return None
 
-    def get(self, query: str) -> Optional[Any]:
+    @staticmethod
+    def _namespace_key(namespace: Optional[Any]) -> str:
+        if namespace is None:
+            return ""
+        if isinstance(namespace, str):
+            return namespace
+        return json.dumps(
+            namespace,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+
+    @staticmethod
+    def _entry_key(query: str, namespace_key: str) -> str:
+        namespace_hash = hashlib.sha1(namespace_key.encode("utf-8")).hexdigest()
+        query_hash = hashlib.sha1(query.encode("utf-8")).hexdigest()
+        return f"{namespace_hash}:{query_hash}"
+
+    def get(self, query: str, *, namespace: Optional[Any] = None) -> Optional[Any]:
+        """返回同一命名空间内与 query 最相似的缓存值。
+
+        namespace 可承载租户、知识库和模型版本等隔离字段；省略时保持原有
+        全局缓存行为，兼容现有调用方。
+        """
         start = metrics_registry.now()
         try:
             vec = self._embed(query)
             if vec is None:
                 _record_miss(self.name)
                 return None
-            with self._lock:
-                keys = list(self._keys)
+            namespace_key = self._namespace_key(namespace)
+            namespace_prefix = hashlib.sha1(namespace_key.encode("utf-8")).hexdigest() + ":"
             best_score = 0.0
             best_value = None
-            for key in keys:
+            for key in self._memory.keys():
+                if not key.startswith(namespace_prefix):
+                    continue
                 entry = self._memory.get(key)
                 if entry is None:
                     continue
@@ -160,16 +188,13 @@ class SemanticCache:
                 {"cache": self.name},
             )
 
-    def set(self, query: str, value: Any) -> None:
+    def set(self, query: str, value: Any, *, namespace: Optional[Any] = None) -> None:
         vec = self._embed(query)
         if vec is None:
             return
-        with self._lock:
-            if query not in self._keys:
-                self._keys.append(query)
-                if len(self._keys) > self._memory.max_entries:
-                    self._keys.pop(0)
-        self._memory.set(query, (vec, value), ttl=self.ttl)
+        namespace_key = self._namespace_key(namespace)
+        key = self._entry_key(query, namespace_key)
+        self._memory.set(key, (vec, value), ttl=self.ttl)
 
 
 class ToolCallCache:

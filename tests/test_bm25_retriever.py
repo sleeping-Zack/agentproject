@@ -47,3 +47,28 @@ def test_bm25_save_and_load_roundtrip(tmp_path):
     assert reloaded.load()
     result = reloaded.retrieve("WiFi 连接", k=2)
     assert result[0].doc_id == "wifi"
+
+
+def test_bm25_rejects_same_size_stale_corpus(tmp_path):
+    index_path = tmp_path / "bm25.pkl"
+    original = BM25Retriever(index_path=str(index_path))
+    original.build(_docs())
+    original.save()
+
+    changed = _docs()
+    changed[0] = Document(page_content="主刷内容已经更新", metadata={"doc_id": "brush"})
+    expected = BM25Retriever.fingerprint_documents(changed)
+
+    reloaded = BM25Retriever(index_path=str(index_path))
+    assert not reloaded.load(expected_fingerprint=expected)
+    assert "fingerprint mismatch" in (reloaded.last_load_error or "")
+
+
+def test_bm25_corrupt_index_fails_closed(tmp_path):
+    index_path = tmp_path / "bm25.pkl"
+    index_path.write_bytes(b"not-a-pickle")
+
+    retriever = BM25Retriever(index_path=str(index_path))
+    assert not retriever.load()
+    assert not retriever.is_ready()
+    assert retriever.last_load_error

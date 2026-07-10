@@ -9,6 +9,7 @@ from utils.logger_handler import logger
 from rag.rag_utils import build_document_metadata
 from rag.retrievers.bm25_retriever import BM25Retriever
 import os
+import threading
 
 
 class VectorStoreService:
@@ -26,12 +27,14 @@ class VectorStoreService:
             length_function=len,
         )
         self._bm25: BM25Retriever | None = None
+        self._bm25_lock = threading.RLock()
 
     def get_retriever(self):
         return self.vector_store.as_retriever(search_kwargs={"k": chroma_conf["k"]})
 
     def _bm25_index_path(self) -> str | None:
-        rel = chroma_conf.get("bm25_index_path")
+        retrieval_config = chroma_conf.get("retrieval") or {}
+        rel = retrieval_config.get("bm25_index_path") or chroma_conf.get("bm25_index_path")
         if not rel:
             return None
         return get_abs_path(rel)
@@ -52,29 +55,37 @@ class VectorStoreService:
 
     def get_bm25_retriever(self) -> BM25Retriever:
         """惰性获取 BM25 索引。加载失败或与 Chroma 数量不一致就重建。"""
-        if self._bm25 is not None and self._bm25.is_ready():
-            return self._bm25
+        with self._bm25_lock:
+            if self._bm25 is not None and self._bm25.is_ready():
+                return self._bm25
 
-        bm25 = BM25Retriever(index_path=self._bm25_index_path())
-        loaded = bm25.load()
-        chroma_docs = self._all_documents_from_chroma()
+            chroma_docs = self._all_documents_from_chroma()
+            fingerprint = BM25Retriever.fingerprint_documents(chroma_docs)
+            bm25 = self._bm25 or BM25Retriever(index_path=self._bm25_index_path())
+            loaded = bm25.load(expected_fingerprint=fingerprint)
+            if not loaded and bm25.last_load_error:
+                logger.warning(f"[BM25]缓存索引不可用，将重建：{bm25.last_load_error}")
 
-        if loaded:
-            expected = len(chroma_docs)
-            actual = len(bm25._payload.doc_ids) if bm25._payload else 0
-            if expected and expected != actual:
-                logger.warning(
-                    f"[BM25]索引与 Chroma 数量不一致 (chroma={expected}, bm25={actual})，重建"
+            if not loaded and chroma_docs:
+                bm25.build(chroma_docs)
+                bm25.save()
+                logger.info(
+                    f"[BM25]索引从 Chroma 重建完成，文档数={len(chroma_docs)}, "
+                    f"fingerprint={fingerprint[:12]}"
                 )
-                loaded = False
 
-        if not loaded and chroma_docs:
-            bm25.build(chroma_docs)
+            self._bm25 = bm25
+            return bm25
+
+    def refresh_bm25_index(self) -> BM25Retriever:
+        """在现有对象上重建，确保已装配的 HybridRetriever 不持有陈旧引用。"""
+        with self._bm25_lock:
+            bm25 = self._bm25 or BM25Retriever(index_path=self._bm25_index_path())
+            documents = self._all_documents_from_chroma()
+            bm25.build(documents)
             bm25.save()
-            logger.info(f"[BM25]索引从 Chroma 重建完成，文档数={len(chroma_docs)}")
-
-        self._bm25 = bm25
-        return bm25
+            self._bm25 = bm25
+            return bm25
 
     def load_document(self):
         """
@@ -161,10 +172,8 @@ class VectorStoreService:
                 continue
 
         if any_added:
-            # 增量入库后强制重建 BM25 索引，保持与 Chroma 一致
-            self._bm25 = None
             try:
-                self.get_bm25_retriever()
+                self.refresh_bm25_index()
             except Exception as exc:
                 logger.warning(f"[BM25]重建失败：{exc}")
 

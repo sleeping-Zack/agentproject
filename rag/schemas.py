@@ -5,7 +5,9 @@ RetrievalCandidate 贯穿 Dense / BM25 / Fusion / Rerank 四层，每层只填�
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from langchain_core.documents import Document
@@ -15,10 +17,10 @@ from langchain_core.documents import Document
 class RetrievalCandidate:
     doc_id: str
     document: Document
-    dense_score: float = 0.0
-    sparse_score: float = 0.0
-    fusion_score: float = 0.0
-    rerank_score: float = 0.0
+    dense_score: Optional[float] = None
+    sparse_score: Optional[float] = None
+    fusion_score: Optional[float] = None
+    rerank_score: Optional[float] = None
     meta: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -33,7 +35,7 @@ class RetrievalCandidate:
     def final_score(self) -> float:
         """返回可用的最强信号：rerank > fusion > dense > sparse。"""
         for value in (self.rerank_score, self.fusion_score, self.dense_score, self.sparse_score):
-            if value:
+            if value is not None:
                 return float(value)
         return 0.0
 
@@ -47,11 +49,20 @@ def stable_doc_id(document: Document, fallback_index: Optional[int] = None) -> s
     if md.get("doc_id"):
         return str(md["doc_id"])
     source = md.get("source_name") or md.get("source") or md.get("file")
-    if source is None:
-        source = f"doc-{fallback_index}" if fallback_index is not None else "unknown"
+    if source is not None:
+        # 绝对路径会随部署目录改变；golden 与索引只保留稳定文件名。
+        source = Path(str(source)).name
     chunk = md.get("chunk_index")
     if chunk is None:
         chunk = md.get("chunk_id")
-    if chunk is None:
-        chunk = fallback_index if fallback_index is not None else 0
-    return f"{source}#{chunk}"
+    if source is not None and chunk is not None:
+        return f"{source}#{chunk}"
+
+    # 旧文档可能没有 chunk metadata。内容摘要比检索结果中的列表下标稳定，
+    # 可以保证 Dense 与 BM25 对同一文档生成相同 key。
+    content = document.page_content or ""
+    if content:
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:24]
+        return f"{source or 'content'}#sha256:{digest}"
+    fallback = fallback_index if fallback_index is not None else 0
+    return f"{source or 'unknown'}#{fallback}"

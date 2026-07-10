@@ -7,6 +7,7 @@ sentence-transformers / torch 都是重依赖，且 CI 不装 rerank extras。
 """
 from __future__ import annotations
 
+import threading
 from typing import List, Optional
 
 from rag.rerankers.base import BaseReranker
@@ -18,18 +19,29 @@ class BGEReranker(BaseReranker):
         self.model_name = model_name
         self._model = None
         self._load_failed = False
+        self._load_lock = threading.Lock()
+        self.last_error: Optional[str] = None
 
     def _ensure_model(self) -> Optional[object]:
         if self._model is not None or self._load_failed:
             return self._model
-        try:
-            from sentence_transformers import CrossEncoder
+        with self._load_lock:
+            if self._model is not None or self._load_failed:
+                return self._model
+            try:
+                from sentence_transformers import CrossEncoder
 
-            self._model = CrossEncoder(self.model_name)
-        except Exception:
-            self._load_failed = True
-            self._model = None
+                self._model = CrossEncoder(self.model_name)
+                self.last_error = None
+            except Exception as exc:
+                self._load_failed = True
+                self._model = None
+                self.last_error = str(exc)
         return self._model
+
+    @property
+    def is_active(self) -> bool:
+        return self._model is not None
 
     def rerank(
         self,
@@ -46,7 +58,8 @@ class BGEReranker(BaseReranker):
         pairs = [(query, c.document.page_content) for c in candidates]
         try:
             scores = model.predict(pairs)
-        except Exception:
+        except Exception as exc:
+            self.last_error = str(exc)
             return candidates[:top_n]
 
         for candidate, score in zip(candidates, scores):

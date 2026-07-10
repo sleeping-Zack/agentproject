@@ -1,4 +1,5 @@
 collection_name: agent
+corpus_version: v1         # 语料内容变更时递增，用于语义缓存失效
 persist_directory: storage/chroma
 k: 3
 data_path: data
@@ -12,6 +13,7 @@ separators: ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
 
 # 混合检索配置：Dense + BM25 -> RRF -> (可选) Reranker
 retrieval:
+  version: hybrid-rrf-v1   # 检索策略或参数语义变更时递增
   dense_k: 20              # Dense 召回数
   bm25_k: 20               # BM25 召回数
   rrf_k: 60                # RRF 融合常数

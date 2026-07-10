@@ -1,6 +1,7 @@
 """
 总结服务类：用户提问，走 Hybrid 检索（Dense + BM25 + RRF + 可选 Rerank），把证据交给模型总结。
 """
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -8,6 +9,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
 from model.factory import chat_model, embed_model
+from observability.context import request_context
 from observability.metrics import metrics_registry
 from rag.rag_utils import format_citations
 from rag.retrievers.bm25_retriever import BM25Retriever
@@ -18,7 +20,7 @@ from rag.schemas import RetrievalCandidate
 from rag.vector_store import VectorStoreService
 from safety.security import UnsafeInputError, assert_safe_retrieved_content
 from services.cache import SemanticCache
-from utils.config_handler import chroma_conf
+from utils.config_handler import chroma_conf, rag_conf
 from utils.prompt_loader import load_rag_prompts
 
 
@@ -65,6 +67,7 @@ class RagSummarizeService(object):
         self._retrieval_cfg = chroma_conf.get("retrieval") or {}
         self._hybrid: Optional[HybridRetriever] = None
         self.prompt_text = load_rag_prompts()
+        self._prompt_version = request_context().prompt_version or "rag_summarize:unversioned"
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)
         self.model = chat_model
         self._chain = None
@@ -115,10 +118,86 @@ class RagSummarizeService(object):
     def retrieve(self, query: str) -> List[RetrievalCandidate]:
         return self.hybrid_retriever.retrieve(query)
 
-    def rag_summarize_result(self, query: str) -> RagResult:
+    def _semantic_cache_namespace(
+        self,
+        *,
+        tenant_id: Optional[str],
+        knowledge_base_id: Optional[str],
+        corpus_version: Optional[str],
+        prompt_version: Optional[str],
+        retrieval_version: Optional[str],
+        model_version: Optional[str],
+    ) -> Dict[str, str]:
+        ctx = request_context()
+        extra = ctx.extra or {}
+        retrieval_cfg = getattr(self, "_retrieval_cfg", {}) or {}
+        configured_model = (
+            f"{rag_conf.get('model_provider', 'unknown')}:"
+            f"{rag_conf.get('chat_model_name', 'unknown')}"
+        )
+        return {
+            "tenant_id": str(tenant_id or ctx.tenant_id or "default"),
+            "knowledge_base_id": str(
+                knowledge_base_id
+                or extra.get("knowledge_base_id")
+                or chroma_conf.get("knowledge_base_id")
+                or chroma_conf.get("collection_name")
+                or "default"
+            ),
+            "corpus_version": str(
+                corpus_version
+                or extra.get("corpus_version")
+                or chroma_conf.get("corpus_version")
+                or chroma_conf.get("chunk_version")
+                or "unversioned"
+            ),
+            "prompt_version": str(
+                prompt_version
+                or extra.get("rag_prompt_version")
+                or getattr(self, "_prompt_version", None)
+                or ctx.prompt_version
+                or "unversioned"
+            ),
+            "retrieval_version": str(
+                retrieval_version
+                or extra.get("retrieval_version")
+                or retrieval_cfg.get("version")
+                or "unversioned"
+            ),
+            "model_version": str(
+                model_version
+                or ctx.model
+                or extra.get("model_version")
+                or configured_model
+            ),
+        }
+
+    def rag_summarize_result(
+        self,
+        query: str,
+        *,
+        tenant_id: Optional[str] = None,
+        knowledge_base_id: Optional[str] = None,
+        corpus_version: Optional[str] = None,
+        prompt_version: Optional[str] = None,
+        retrieval_version: Optional[str] = None,
+        model_version: Optional[str] = None,
+    ) -> RagResult:
+        cache_namespace = None
         if self._semantic_cache is not None:
-            cached = self._semantic_cache.get(query)
-            if cached is not None:
+            cache_namespace = self._semantic_cache_namespace(
+                tenant_id=tenant_id,
+                knowledge_base_id=knowledge_base_id,
+                corpus_version=corpus_version,
+                prompt_version=prompt_version,
+                retrieval_version=retrieval_version,
+                model_version=model_version,
+            )
+            cached = self._semantic_cache.get(query, namespace=cache_namespace)
+            if isinstance(cached, RagResult):
+                metrics_registry.inc_counter("agent_rag_cache_hit_total")
+                return deepcopy(cached)
+            if isinstance(cached, str):
                 metrics_registry.inc_counter("agent_rag_cache_hit_total")
                 return RagResult(answer=cached)
 
@@ -158,10 +237,15 @@ class RagSummarizeService(object):
             }
         )
         citations = format_citations(safe_docs)
-        result = f"{answer}\n\n引用来源：\n{citations}" if citations else answer
+        answer_with_citations = f"{answer}\n\n引用来源：\n{citations}" if citations else answer
+        result = RagResult(
+            answer=answer_with_citations,
+            evidence=evidence,
+            citations=citations_structured,
+        )
         if self._semantic_cache is not None:
-            self._semantic_cache.set(query, result)
-        return RagResult(answer=result, evidence=evidence, citations=citations_structured)
+            self._semantic_cache.set(query, deepcopy(result), namespace=cache_namespace)
+        return result
 
     def rag_summarize(self, query: str) -> str:
         return self.rag_summarize_result(query).answer

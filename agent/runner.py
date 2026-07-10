@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
+from agent.memory import ConversationMemory
 from agent.policies import PolicyAction, ToolPolicy
 from agent.state import AgentState, ArtifactRef, Budget, Observation, ToolCallRecord
 from agent.verifier import AnswerVerifier, VerifyResult
@@ -132,6 +133,7 @@ class AgentRunner:
         policy: Optional[ToolPolicy] = None,
         approval_store: Optional[SQLiteApprovalStore] = None,
         artifact_store: Optional[SQLiteArtifactStore] = None,
+        conversation_memory: Optional[ConversationMemory] = None,
         verifier: Optional[AnswerVerifier] = None,
         max_steps: int = 8,
         max_tool_calls: int = 5,
@@ -146,6 +148,7 @@ class AgentRunner:
         self.policy = policy or ToolPolicy()
         self.approval_store = approval_store or SQLiteApprovalStore()
         self.artifact_store = artifact_store or SQLiteArtifactStore()
+        self.conversation_memory = conversation_memory
         self.verifier = verifier or AnswerVerifier()
         self.max_steps = max_steps
         self.max_tool_calls = max_tool_calls
@@ -432,6 +435,15 @@ class AgentRunner:
         verifier: Optional[VerifyResult] = None,
         approval_id: Optional[str] = None,
     ) -> AgentRunResult:
+        if self.conversation_memory is not None:
+            self.conversation_memory.commit_turn(
+                session_id=state.session_id,
+                request_id=state.request_id,
+                user_message=state.user_goal,
+                assistant_message=answer,
+                status=state.status,
+                tenant_id=state.tenant_id,
+            )
         return AgentRunResult(
             state=state,
             answer=answer,

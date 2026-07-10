@@ -5,8 +5,19 @@ data_path: data
 md5_hex_store: storage/md5.text
 allow_knowledge_file_type: ["txt", "pdf"]
 chunk_version: v2
-hybrid_keyword_weight: 0.35
 
 chunk_size: 200
 chunk_overlap: 20
 separators: ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
+
+# 混合检索配置：Dense + BM25 -> RRF -> (可选) Reranker
+retrieval:
+  dense_k: 20              # Dense 召回数
+  bm25_k: 20               # BM25 召回数
+  rrf_k: 60                # RRF 融合常数
+  fusion_top_n: 20         # 融合后进入 rerank 的候选数
+  final_top_n: 5           # 最终返回的证据数
+  enable_bm25: true
+  enable_reranker: false   # 默认关闭；本地/线上按需 true
+  reranker_model: BAAI/bge-reranker-v2-m3
+  bm25_index_path: storage/bm25_index.pkl

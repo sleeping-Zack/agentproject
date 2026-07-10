@@ -1,58 +1,85 @@
-from typing import Dict, Iterable, List, Tuple
+"""生成评测的答案侧指标。
+
+只评估"答案-证据"这一层，不再评估"检索到什么"（那属于检索评测，见 scripts/evaluate_retrieval.py）。
+
+- keyword_coverage: expected_facts 命中率
+- forbidden_hit_rate: forbidden_facts 命中率（越低越好）
+- citation_hit_rate: 期望来源在答案里的出现率
+- citation_validity: 答案里的 [n]/来源引用是否都指向传入的 evidence 集合
+"""
+from __future__ import annotations
+
+import re
+from typing import Dict, Iterable, List
 
 
 def _contains_any(text: str, values: Iterable[str]) -> bool:
     return any(value in text for value in values)
 
 
-def evaluate_case(case: Dict, retrieved: List[Dict], answer: str, k: int = 3) -> Dict[str, float]:
-    expected_keywords = case.get("expected_keywords", [])
+def keyword_coverage(answer: str, expected: List[str]) -> float:
+    if not expected:
+        return 1.0
+    hits = sum(1 for kw in expected if kw in answer)
+    return hits / len(expected)
+
+
+def forbidden_hit_rate(answer: str, forbidden: List[str]) -> float:
+    if not forbidden:
+        return 0.0
+    hits = sum(1 for kw in forbidden if kw in answer)
+    return hits / len(forbidden)
+
+
+def citation_hit_rate(answer: str, expected_sources: List[str]) -> float:
+    if not expected_sources:
+        return 1.0
+    hits = sum(1 for src in expected_sources if src in answer)
+    return hits / len(expected_sources)
+
+
+_CITATION_PATTERN = re.compile(r"\[(\d+)\]")
+
+
+def citation_validity(answer: str, evidence_count: int) -> float:
+    """答案里出现的 [n] 引用是否都落在 evidence 集合内。空引用视作 1.0。"""
+    if evidence_count <= 0:
+        return 1.0
+    matches = _CITATION_PATTERN.findall(answer)
+    if not matches:
+        return 1.0
+    valid = sum(1 for m in matches if 1 <= int(m) <= evidence_count)
+    return valid / len(matches)
+
+
+def evaluate_generation_case(case: Dict, answer: str, evidence_count: int) -> Dict[str, float]:
+    expected_keywords = case.get("expected_keywords") or case.get("expected_facts") or []
+    forbidden = case.get("forbidden_facts", [])
     expected_sources = case.get("expected_sources", [])
-    top_docs = retrieved[:k]
-    joined_content = "\n".join(doc.get("content", "") for doc in top_docs)
-
-    keyword_hits = sum(1 for keyword in expected_keywords if keyword in joined_content)
-    recall_at_k = keyword_hits / len(expected_keywords) if expected_keywords else 1.0
-
-    mrr = 0.0
-    for index, doc in enumerate(top_docs, start=1):
-        if _contains_any(doc.get("content", ""), expected_keywords) or doc.get("source") in expected_sources:
-            mrr = 1 / index
-            break
-
-    citation_hits = sum(1 for source in expected_sources if source in answer)
-    citation_hit_rate = citation_hits / len(expected_sources) if expected_sources else 1.0
-
-    answer_keyword_hits = sum(1 for keyword in expected_keywords if keyword in answer)
-    hallucination_rate = 0.0 if answer_keyword_hits or citation_hit_rate > 0 else 1.0
 
     return {
-        "recall_at_k": round(recall_at_k, 4),
-        "mrr": round(mrr, 4),
-        "citation_hit_rate": round(citation_hit_rate, 4),
-        "hallucination_rate": round(hallucination_rate, 4),
+        "keyword_coverage": round(keyword_coverage(answer, expected_keywords), 4),
+        "forbidden_hit_rate": round(forbidden_hit_rate(answer, forbidden), 4),
+        "citation_hit_rate": round(citation_hit_rate(answer, expected_sources), 4),
+        "citation_validity": round(citation_validity(answer, evidence_count), 4),
     }
 
 
-def evaluate_cases(cases: List[Dict], results: List[Tuple[List[Dict], str]], k: int = 3) -> Dict:
-    metrics = [evaluate_case(case, docs, answer, k=k) for case, (docs, answer) in zip(cases, results)]
-    if not metrics:
-        return {"case_count": 0, "recall_at_k": 0, "mrr": 0, "citation_hit_rate": 0, "hallucination_rate": 0}
+def summarize_generation_metrics(per_case: List[Dict[str, float]]) -> Dict[str, float]:
+    if not per_case:
+        return {
+            "case_count": 0,
+            "keyword_coverage": 0.0,
+            "forbidden_hit_rate": 0.0,
+            "citation_hit_rate": 0.0,
+            "citation_validity": 0.0,
+        }
     return {
-        "case_count": len(metrics),
-        "recall_at_k": round(sum(item["recall_at_k"] for item in metrics) / len(metrics), 4),
-        "mrr": round(sum(item["mrr"] for item in metrics) / len(metrics), 4),
-        "citation_hit_rate": round(
-            sum(item["citation_hit_rate"] for item in metrics) / len(metrics), 4
+        "case_count": len(per_case),
+        "keyword_coverage": round(sum(m["keyword_coverage"] for m in per_case) / len(per_case), 4),
+        "forbidden_hit_rate": round(
+            sum(m["forbidden_hit_rate"] for m in per_case) / len(per_case), 4
         ),
-        "hallucination_rate": round(
-            sum(item["hallucination_rate"] for item in metrics) / len(metrics), 4
-        ),
-    }
-
-
-def summarize_strategy_metrics(cases: List[Dict], strategy_results: Dict, k: int = 3) -> Dict:
-    return {
-        strategy: evaluate_cases(cases, results, k=k)
-        for strategy, results in strategy_results.items()
+        "citation_hit_rate": round(sum(m["citation_hit_rate"] for m in per_case) / len(per_case), 4),
+        "citation_validity": round(sum(m["citation_validity"] for m in per_case) / len(per_case), 4),
     }

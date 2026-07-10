@@ -1,4 +1,4 @@
-from rag.rag_utils import build_document_metadata, format_citations, hybrid_rank
+from rag.rag_utils import build_document_metadata, format_citations
 
 
 class Doc:
@@ -17,23 +17,6 @@ def test_build_document_metadata_tracks_source_and_chunk_version(tmp_path):
     assert metadata["source_path"].endswith("维护保养.txt")
     assert metadata["chunk_version"] == "v2"
     assert len(metadata["content_hash"]) == 32
-
-
-def test_hybrid_rank_uses_keyword_signal_with_vector_score():
-    docs = [
-        Doc("扫地机器人无法连接 WiFi 时应重启路由器", {"doc_id": "wifi"}),
-        Doc("主刷缠绕毛发时应剪断并清理滚刷", {"doc_id": "brush"}),
-    ]
-
-    ranked = hybrid_rank(
-        "主刷 缠绕",
-        docs,
-        vector_scores={"wifi": 0.9, "brush": 0.1},
-        keyword_weight=0.8,
-        top_n=1,
-    )
-
-    assert ranked[0].metadata["doc_id"] == "brush"
 
 
 def test_format_citations_includes_source_metadata():

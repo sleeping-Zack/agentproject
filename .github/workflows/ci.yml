@@ -18,6 +18,14 @@ jobs:
           pip install -e ".[dev]"
       - name: Run tests
         run: python -m pytest tests -q
+      - name: Retrieval eval smoke (schema check only)
+        # 检索评测需要真实向量库和 embedding，CI 只做 schema/import 校验
+        run: |
+          if [ -f evals/retrieval_golden.jsonl ]; then
+            python scripts/evaluate_retrieval.py --schema-check
+          else
+            echo "retrieval_golden.jsonl 不存在，跳过检索评测（需先运行 generate_retrieval_golden.py 并审校）"
+          fi
       - name: Agent eval smoke (dry-run, validates golden set + script)
         run: python scripts/evaluate_agent.py --dry-run
       - name: Harness eval smoke (mock/offline)

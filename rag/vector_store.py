@@ -7,6 +7,7 @@ from utils.path_tool import get_abs_path
 from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type, get_file_md5_hex
 from utils.logger_handler import logger
 from rag.rag_utils import build_document_metadata
+from rag.retrievers.bm25_retriever import BM25Retriever
 import os
 
 
@@ -24,9 +25,56 @@ class VectorStoreService:
             separators=chroma_conf["separators"],
             length_function=len,
         )
+        self._bm25: BM25Retriever | None = None
 
     def get_retriever(self):
         return self.vector_store.as_retriever(search_kwargs={"k": chroma_conf["k"]})
+
+    def _bm25_index_path(self) -> str | None:
+        rel = chroma_conf.get("bm25_index_path")
+        if not rel:
+            return None
+        return get_abs_path(rel)
+
+    def _all_documents_from_chroma(self) -> list[Document]:
+        """从 Chroma 里 dump 所有文档，用于现场重建 BM25 索引。"""
+        try:
+            payload = self.vector_store.get(include=["documents", "metadatas"])
+        except Exception as exc:
+            logger.warning(f"[BM25]从 Chroma dump 文档失败：{exc}")
+            return []
+        docs: list[Document] = []
+        for content, meta in zip(payload.get("documents") or [], payload.get("metadatas") or []):
+            if content is None:
+                continue
+            docs.append(Document(page_content=content, metadata=meta or {}))
+        return docs
+
+    def get_bm25_retriever(self) -> BM25Retriever:
+        """惰性获取 BM25 索引。加载失败或与 Chroma 数量不一致就重建。"""
+        if self._bm25 is not None and self._bm25.is_ready():
+            return self._bm25
+
+        bm25 = BM25Retriever(index_path=self._bm25_index_path())
+        loaded = bm25.load()
+        chroma_docs = self._all_documents_from_chroma()
+
+        if loaded:
+            expected = len(chroma_docs)
+            actual = len(bm25._payload.doc_ids) if bm25._payload else 0
+            if expected and expected != actual:
+                logger.warning(
+                    f"[BM25]索引与 Chroma 数量不一致 (chroma={expected}, bm25={actual})，重建"
+                )
+                loaded = False
+
+        if not loaded and chroma_docs:
+            bm25.build(chroma_docs)
+            bm25.save()
+            logger.info(f"[BM25]索引从 Chroma 重建完成，文档数={len(chroma_docs)}")
+
+        self._bm25 = bm25
+        return bm25
 
     def load_document(self):
         """
@@ -68,6 +116,7 @@ class VectorStoreService:
             tuple(chroma_conf["allow_knowledge_file_type"]),
         )
 
+        any_added = False
         for path in allowed_files_path:
             # 获取文件的MD5
             md5_hex = get_file_md5_hex(path)
@@ -100,6 +149,7 @@ class VectorStoreService:
 
                 # 将内容存入向量库
                 self.vector_store.add_documents(split_document)
+                any_added = True
 
                 # 记录这个已经处理好的文件的md5，避免下次重复加载
                 save_md5_hex(md5_hex)
@@ -109,6 +159,14 @@ class VectorStoreService:
                 # exc_info为True会记录详细的报错堆栈，如果为False仅记录报错信息本身
                 logger.error(f"[加载知识库]{path}加载失败：{str(e)}", exc_info=True)
                 continue
+
+        if any_added:
+            # 增量入库后强制重建 BM25 索引，保持与 Chroma 一致
+            self._bm25 = None
+            try:
+                self.get_bm25_retriever()
+            except Exception as exc:
+                logger.warning(f"[BM25]重建失败：{exc}")
 
 
 if __name__ == '__main__':
@@ -122,5 +180,3 @@ if __name__ == '__main__':
     for r in res:
         print(r.page_content)
         print("-"*20)
-
-

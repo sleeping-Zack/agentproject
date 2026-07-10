@@ -1,0 +1,28 @@
+{
+  "request_id": "12b226f9-b730-4e90-901a-368bf71ebdd1",
+  "session_id": "demo-qa-4",
+  "status": "completed",
+  "answer": "主刷缠绕毛发是扫地机器人常见的使用问题，建议按以下步骤处理：\n\n1. **拆卸主刷**：先将主刷两端的卡扣打开，小心取下主刷；\n2. **剪断毛发**：使用剪刀将缠绕在主刷上的毛发剪断，**切勿强行拉扯**，以免损伤刷毛或内部结构；\n3. **利用防缠绕设计（如有）**：部分机型配有梳齿式防缠绕结构，可借助梳齿快速剥离毛发；\n4. **清理滚刷仓**：主刷取出后，用小毛刷或干布清除滚刷仓内的灰尘和碎屑；\n5. **定期维护**：建议每次清扫任务完成后简单检查主刷，**每周彻底清理一次**，防止毛发堆积影响清洁效率和电机寿命。\n\n如您的机型有特殊结构，也可查阅说明书或提供型号，我可以为您提供更具体的指导。\n",
+  "approval_id": null,
+  "artifacts": [
+    {
+      "artifact_id": "10cbc545-31b6-4252-907a-715477dac7eb",
+      "type": "answer",
+      "name": "final-answer"
+    }
+  ],
+  "verifier": {
+    "passed": true,
+    "action": "accept",
+    "score": 5.0,
+    "reasons": [],
+    "judge": {
+      "correctness": 5.0,
+      "faithfulness": 5.0,
+      "completeness": 5.0,
+      "overall": 5.0,
+      "rationale": "judge disabled"
+    }
+  },
+  "trace_url": "/traces/12b226f9-b730-4e90-901a-368bf71ebdd1"
+}

@@ -26,9 +26,12 @@ rag/chroma_db/
 storage/chroma/
 storage/md5.text
 storage/*.db
+storage/*.pkl
+storage/*_report.json
 md5.text
 /tmp_answer.txt
 /tmp_response.json
+/reports/
 
 # Build artifacts
 dist/

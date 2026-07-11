@@ -1,3 +1,6 @@
+from threading import Barrier
+
+from agent.budget import BudgetManager
 from agent.planner import (
     PlanExecutor,
     PlannerAgent,
@@ -54,6 +57,36 @@ def test_executor_returns_error_when_handler_missing():
 
     assert not results[0].success
     assert "no handler" in (results[0].error or "")
+
+
+def test_parallel_executor_tasks_share_one_budget_manager():
+    manager = BudgetManager(max_tool_calls=2)
+    executor = PlanExecutor(max_workers=4, budget_manager=manager)
+    admitted = Barrier(2)
+
+    def handler(task):
+        admitted.wait(timeout=2)
+        return SubTaskResult(
+            id=task.id,
+            kind=task.kind,
+            success=True,
+            content=task.id,
+        )
+
+    executor.register_handler("work", handler)
+    plan = [
+        SubTask(id=f"t{index}", kind="work", description="")
+        for index in range(6)
+    ]
+
+    results = executor.execute(plan)
+
+    assert sum(result.success for result in results) == 2
+    assert manager.snapshot()["used_tool_calls"] == 2
+    assert all(
+        result.success or result.error == "max_tool_calls_exceeded"
+        for result in results
+    )
 
 
 def test_aggregator_merges_multiple_successes():

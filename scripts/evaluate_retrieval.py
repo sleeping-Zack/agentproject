@@ -298,6 +298,7 @@ def main() -> None:
     parser.add_argument("--min-mrr", type=float, default=0.5)
     parser.add_argument("--min-ndcg", type=float, default=0.5)
     parser.add_argument("--dry-run", "--schema-check", dest="dry_run", action="store_true")
+    parser.add_argument("--split", help="只评测指定 split 的样本，如 'test' 或 'dev'")
     args = parser.parse_args()
 
     if args.k <= 0:
@@ -307,6 +308,11 @@ def main() -> None:
         cases = load_golden(Path(args.golden))
     except (FileNotFoundError, ValueError) as exc:
         parser.error(str(exc))
+
+    if args.split:
+        cases = [c for c in cases if c.get("split") == args.split]
+        if not cases:
+            parser.error(f"--split {args.split!r} matched no cases in golden set")
 
     if args.dry_run:
         print(json.dumps({"dry_run": True, "case_count": len(cases)}, ensure_ascii=False))

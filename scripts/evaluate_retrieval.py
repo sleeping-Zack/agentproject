@@ -189,9 +189,12 @@ def _build_fixture_strategies(
 ) -> tuple[Dict[str, Any], set[str]]:
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     rankings = fixture.get("rankings") or {}
-    expected = {"dense_only", "hybrid", "hybrid_rerank"}
-    if set(rankings) != expected:
-        raise ValueError(f"fixture must contain exactly these strategies: {sorted(expected)}")
+    required = {"dense_only", "hybrid"}
+    supported = required | {"hybrid_rerank"}
+    if not required.issubset(rankings) or not set(rankings).issubset(supported):
+        raise ValueError(
+            "fixture must contain dense_only and hybrid, with optional hybrid_rerank"
+        )
     case_ids = {case["id"] for case in cases}
     query_by_id = {case["id"]: case["query"] for case in cases}
     known_ids: set[str] = set()

@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 
 from observability.tracing import trace_recorder
 from rag.eval_gate import EvalGate, EvalThresholds
+from utils.streaming import get_final_response
 
 
 @dataclass
@@ -128,7 +129,7 @@ def _evaluate_case(agent, case: Dict) -> CaseResult:
         chunks = list(agent.execute_stream(
             query, session_id=case["id"], request_id=request_id, tenant_id="eval"
         ))
-        answer = "".join(chunks)
+        answer = get_final_response(chunks)
     except Exception as exc:
         return CaseResult(
             id=case["id"], passed=False, tool_recall=0.0, keyword_recall=0.0,
@@ -309,7 +310,9 @@ def main() -> None:
         "cases": case_payload,
     }
     if args.report:
-        Path(args.report).write_text(
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
             json.dumps(report_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -390,7 +393,14 @@ def _evaluate_case_harness(runner, case: Dict) -> CaseResult:
         keyword_recall = 1.0
 
     verifier_quality = getattr(result.verifier, "quality", {}) if result.verifier else {}
-    citation_validity = float(verifier_quality.get("citation_validity", 1.0))
+    measured_citation_validity = float(verifier_quality.get("citation_validity", 1.0))
+    # A negative citation case is successful when the verifier rejects it.
+    # Gate metrics should measure unsafe citations that escaped, not expected rejections.
+    citation_validity = (
+        1.0
+        if expected_status != "completed" and status_matches
+        else measured_citation_validity
+    )
     artifact_saved = bool(result.artifacts) if case.get("expect_artifact", expected_status == "completed") else True
     passed = (
         status_matches
@@ -421,6 +431,7 @@ def _evaluate_case_harness(runner, case: Dict) -> CaseResult:
             "request_id": request_id,
             "status": result.state.status,
             "expected_status": expected_status,
+            "measured_citation_validity": measured_citation_validity,
         },
     )
 

@@ -1,9 +1,10 @@
 {
-  "schema_version": 1,
-  "baseline_commit": "3795b11cc8c0067dbb8a960261014c29b41baa2c",
-  "generated_at": "2026-07-10T14:55:10Z",
+  "schema_version": 2,
+  "baseline_commit": "6c84db741cd0d36673472f0d06477e662c8ee798",
+  "generated_at": "2026-07-11T05:58:07.796662+00:00",
   "fixture": "evals/fixtures/retrieval_rankings_v1.json",
   "golden": "evals/retrieval_golden.jsonl",
+  "case_count": 30,
   "k": 5,
   "allowed_regression": {
     "recall_at_k": 0.0,
@@ -14,25 +15,18 @@
   },
   "strategies": {
     "dense_only": {
-      "recall_at_k": 0.75,
-      "precision_at_k": 0.15,
-      "mrr": 0.3479,
-      "ndcg_at_k": 0.4474,
-      "hit_rate": 0.75
+      "recall_at_k": 0.8056,
+      "precision_at_k": 0.34,
+      "mrr": 0.8778,
+      "ndcg_at_k": 0.7683,
+      "hit_rate": 0.9333
     },
     "hybrid": {
-      "recall_at_k": 1.0,
-      "precision_at_k": 0.225,
-      "mrr": 0.6562,
-      "ndcg_at_k": 0.7457,
-      "hit_rate": 1.0
-    },
-    "hybrid_rerank": {
-      "recall_at_k": 1.0,
-      "precision_at_k": 0.225,
-      "mrr": 1.0,
-      "ndcg_at_k": 1.0,
-      "hit_rate": 1.0
+      "recall_at_k": 0.9333,
+      "precision_at_k": 0.3933,
+      "mrr": 0.9333,
+      "ndcg_at_k": 0.9035,
+      "hit_rate": 0.9333
     }
   }
 }

@@ -1,0 +1,58 @@
+name: Online quality evaluation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 18 * * 1"
+  push:
+    branches:
+      - main
+      - "release/**"
+
+permissions:
+  contents: read
+
+jobs:
+  online-evaluation:
+    runs-on: ubuntu-latest
+    environment: online-evaluation
+    continue-on-error: true
+    timeout-minutes: 60
+    env:
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      MODEL_PROVIDER: tongyi
+      AGENT_MODEL_PROVIDER: tongyi
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install online evaluation dependencies
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev,rerank]"
+      - name: Evaluate live retrieval strategies
+        continue-on-error: true
+        run: >-
+          python scripts/evaluate_retrieval.py
+          --enable-reranker
+          --report reports/retrieval-online.json
+      - name: Evaluate live RAG generation
+        continue-on-error: true
+        run: python scripts/evaluate_rag.py --report reports/rag-generation-online.json
+      - name: Evaluate live agent
+        continue-on-error: true
+        run: >-
+          python scripts/evaluate_agent.py
+          --mode harness
+          --golden evals/agent_golden.jsonl
+          --report reports/agent-online.json
+      - name: Upload quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: online-quality-reports-${{ github.run_id }}
+          path: reports/*.json
+          if-no-files-found: warn

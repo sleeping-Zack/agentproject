@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
+from agent.budget import BudgetExceeded, Reservation
 from agent.memory import ConversationMemory
 from agent.policies import PolicyAction, ToolPolicy
 from agent.state import AgentState, ArtifactRef, Budget, Observation, ToolCallRecord
@@ -36,6 +37,7 @@ class AgentBackendResult:
     tokens_out: int = 0
     cost: float = 0.0
     cost_mode: str = "estimated"
+    budget_accounted: bool = False
 
 
 @dataclass
@@ -52,11 +54,18 @@ class ReactAgentBackend:
     def __init__(self, agent=None) -> None:
         self.agent = agent
 
+    @property
+    def manages_budget(self) -> bool:
+        # The lazily-created production ReactAgent installs budget middleware.
+        # Test/legacy agents opt in explicitly via ``manages_budget``.
+        return self.agent is None or bool(getattr(self.agent, "manages_budget", False))
+
     def __call__(self, task: AgentTask, state: AgentState) -> AgentBackendResult:
         if self.agent is None:
             from agent.react_agent import ReactAgent
 
             self.agent = ReactAgent()
+        budget_manager = state.budget.manager if state is not None else None
         chunks = list(
             self.agent.execute_stream(
                 task.query,
@@ -67,6 +76,12 @@ class ReactAgentBackend:
                 scene=task.scene,
                 approval_id=task.approval_id,
                 max_tool_calls=state.budget.max_tool_calls if state is not None else None,
+                budget_manager=budget_manager,
+                max_model_output_tokens=(
+                    state.budget.manager.remaining_output_tokens()
+                    if state is not None
+                    else None
+                ),
             )
         )
         trace_payload = trace_recorder.export_trace(task.request_id)
@@ -90,6 +105,7 @@ class ReactAgentBackend:
             tokens_out=tokens_out,
             cost=cost,
             cost_mode=cost_mode,
+            budget_accounted=budget_manager is not None and self.manages_budget,
         )
 
     @staticmethod
@@ -139,6 +155,8 @@ class AgentRunner:
         max_tool_calls: int = 5,
         max_tokens: int = 8000,
         max_cost: float = 1.0,
+        max_model_output_tokens: Optional[int] = None,
+        max_duration_seconds: Optional[float] = None,
         max_verification_retries: int = 1,
         estimated_cost_per_1k_tokens: float = float(
             os.getenv("AGENT_ESTIMATED_COST_PER_1K_TOKENS", "0.001")
@@ -154,6 +172,10 @@ class AgentRunner:
         self.max_tool_calls = max_tool_calls
         self.max_tokens = max_tokens
         self.max_cost = max_cost
+        self.max_model_output_tokens = (
+            max_tokens if max_model_output_tokens is None else max_model_output_tokens
+        )
+        self.max_duration_seconds = max_duration_seconds
         self.max_verification_retries = max_verification_retries
         self.estimated_cost_per_1k_tokens = estimated_cost_per_1k_tokens
 
@@ -173,10 +195,12 @@ class AgentRunner:
                 max_tool_calls=self.max_tool_calls,
                 max_tokens=self.max_tokens,
                 max_cost=self.max_cost,
+                deadline_seconds=self.max_duration_seconds,
             ),
         )
-        if not state.budget.can_continue():
-            state.mark_blocked(state.budget.stop_reason() or "budget_exhausted")
+        initial_budget_error = self._backend_preflight_reason(state, task.query)
+        if initial_budget_error is not None:
+            state.mark_blocked(initial_budget_error)
             self._record_diagnostic(state, "budget", "blocked")
             return self._result(state, state.error or "budget exhausted")
 
@@ -188,15 +212,44 @@ class AgentRunner:
         tool_results: List[Dict[str, Any]] = []
         verifier_result: Optional[VerifyResult] = None
         for attempt in range(self.max_verification_retries + 1):
+            budget_error = self._backend_preflight_reason(state, task.query)
+            if budget_error is not None:
+                state.mark_blocked(budget_error)
+                self._record_diagnostic(
+                    state,
+                    "budget",
+                    "blocked",
+                    retry=attempt,
+                    failure_reason=budget_error,
+                )
+                return self._result(state, state.error or "budget exhausted", verifier_result)
             step = state.record_step(
                 step_type="backend",
                 name="execute_agent_backend",
                 status="running",
                 metadata={"attempt": attempt},
             )
+            model_reservation: Reservation | None = None
             try:
+                if not self._backend_manages_budget():
+                    model_reservation = self._reserve_backend_model_call(state, task.query)
                 backend_result = self.backend(task, state)
+            except BudgetExceeded as exc:
+                if model_reservation is not None:
+                    state.budget.manager.release_model_call(model_reservation)
+                state.mark_blocked(exc.reason)
+                self._record_diagnostic(
+                    state,
+                    "budget",
+                    "blocked",
+                    step_id=step.step_id,
+                    retry=attempt,
+                    failure_reason=exc.reason,
+                )
+                return self._result(state, state.error or "budget exhausted", verifier_result)
             except Exception as exc:
+                if model_reservation is not None:
+                    state.budget.manager.release_model_call(model_reservation)
                 state.mark_failed(str(exc))
                 self._record_diagnostic(
                     state, "backend", "failed", step_id=step.step_id,
@@ -219,10 +272,21 @@ class AgentRunner:
                 answer,
                 backend_result,
             )
-            state.budget.record_tokens(tokens_in + tokens_out)
-            state.budget.record_cost(cost)
-            if not state.budget.can_continue():
-                state.mark_blocked(state.budget.stop_reason() or "budget_exhausted")
+            if model_reservation is not None:
+                state.budget.manager.commit_model_call(
+                    model_reservation,
+                    actual_tokens=tokens_in + tokens_out,
+                    actual_cost=cost,
+                )
+            elif not backend_result.budget_accounted:
+                # Compatibility for an opt-in backend that did not account a
+                # result itself. Production ReactAgent responses take the
+                # middleware path and never reach this fallback.
+                state.budget.record_tokens(tokens_in + tokens_out)
+                state.budget.record_cost(cost)
+            usage_error = self._usage_overrun_reason(state)
+            if usage_error is not None:
+                state.mark_blocked(usage_error)
                 self._record_diagnostic(
                     state,
                     "budget",
@@ -233,22 +297,39 @@ class AgentRunner:
                     tokens_out=tokens_out,
                     cost=cost,
                     cost_mode=cost_mode,
-                    failure_reason=state.error,
+                    failure_reason=usage_error,
                 )
                 return self._result(state, state.error or "budget exhausted", verifier_result)
             for tool_result in backend_result.tool_results:
-                if state.budget.can_continue():
-                    state.add_tool_call(
-                        ToolCallRecord(
-                            tool_name=str(tool_result.get("tool", "unknown")),
-                            args={},
-                            status=str(tool_result.get("status", "completed")),
-                            result=str(tool_result.get("content", ""))[:500],
+                tool_name = str(tool_result.get("tool", "unknown"))
+                if not backend_result.budget_accounted:
+                    try:
+                        tool_reservation = state.budget.manager.reserve_tool_call(tool_name)
+                    except BudgetExceeded as exc:
+                        state.mark_blocked(exc.reason)
+                        self._record_diagnostic(
+                            state,
+                            "budget",
+                            "blocked",
+                            step_id=step.step_id,
+                            tool=tool_name,
+                            failure_reason=exc.reason,
                         )
-                    )
-            if not state.budget.can_continue():
-                state.mark_blocked(state.budget.stop_reason() or "budget_exhausted")
-                return self._result(state, state.error or "budget exhausted", verifier_result)
+                        return self._result(
+                            state,
+                            state.error or "budget exhausted",
+                            verifier_result,
+                        )
+                    state.budget.manager.commit_tool_call(tool_reservation)
+                state.add_tool_call(
+                    ToolCallRecord(
+                        tool_name=tool_name,
+                        args={},
+                        status=str(tool_result.get("status", "completed")),
+                        result=str(tool_result.get("content", ""))[:500],
+                    ),
+                    count_budget=False,
+                )
 
             verifier_result = self.verifier.verify(
                 query=task.query,
@@ -324,7 +405,8 @@ class AgentRunner:
                     args=args,
                     status="approved",
                     risk_level="medium",
-                )
+                ),
+                count_budget=False,
             )
             return None
         if decision.action == PolicyAction.DENY:
@@ -335,7 +417,8 @@ class AgentRunner:
                     status="denied",
                     error=decision.reason,
                     risk_level="medium",
-                )
+                ),
+                count_budget=False,
             )
             state.mark_rejected(decision.reason, "请求未执行：当前场景无权读取使用记录。")
             self._record_diagnostic(state, "policy", "denied", failure_reason=decision.reason)
@@ -357,7 +440,8 @@ class AgentRunner:
                             status="approved",
                             approval_id=approval.approval_id,
                             risk_level="medium",
-                        )
+                        ),
+                        count_budget=False,
                     )
                     return None
                 if approval.is_denied:
@@ -388,7 +472,8 @@ class AgentRunner:
                     status="pending_approval",
                     approval_id=approval.approval_id,
                     risk_level="medium",
-                )
+                ),
+                count_budget=False,
             )
             state.mark_pending_approval(approval.approval_id)
             self._record_diagnostic(
@@ -518,6 +603,56 @@ class AgentRunner:
             )
         tokens_in, tokens_out, cost = self._estimate_usage(query, answer)
         return tokens_in, tokens_out, cost, "estimated"
+
+    def _backend_manages_budget(self) -> bool:
+        return bool(getattr(self.backend, "manages_budget", False))
+
+    def _backend_preflight_reason(self, state: AgentState, query: str) -> Optional[str]:
+        manager = state.budget.manager
+        try:
+            manager.check_deadline()
+        except BudgetExceeded as exc:
+            return exc.reason
+        if state.budget.used_steps >= state.budget.max_steps:
+            return "max_steps_exceeded"
+        input_tokens = max(1, (len(query) + 3) // 4)
+        if manager.remaining_output_tokens(input_tokens) <= 0:
+            return "max_tokens_exceeded"
+        if manager.remaining_cost <= 0:
+            return "max_cost_exceeded"
+        return None
+
+    def _reserve_backend_model_call(self, state: AgentState, query: str) -> Reservation:
+        manager = state.budget.manager
+        input_tokens = max(1, (len(query) + 3) // 4)
+        output_cap = min(
+            self.max_model_output_tokens,
+            manager.remaining_output_tokens(input_tokens),
+        )
+        if self.estimated_cost_per_1k_tokens > 0:
+            affordable_total = int(
+                (manager.remaining_cost * 1000.0) / self.estimated_cost_per_1k_tokens
+            )
+            output_cap = min(output_cap, max(0, affordable_total - input_tokens))
+        estimated_cost = round(
+            ((input_tokens + output_cap) / 1000.0)
+            * self.estimated_cost_per_1k_tokens,
+            6,
+        )
+        return manager.reserve_model_call(
+            estimated_input_tokens=input_tokens,
+            max_output_tokens=output_cap,
+            estimated_cost=estimated_cost,
+        )
+
+    @staticmethod
+    def _usage_overrun_reason(state: AgentState) -> Optional[str]:
+        snapshot = state.budget.manager.snapshot()
+        if int(snapshot["used_tokens"]) > int(snapshot["max_tokens"]):
+            return "max_tokens_exceeded"
+        if float(snapshot["used_cost"]) > float(snapshot["max_cost"]):
+            return "max_cost_exceeded"
+        return None
 
     def _estimate_usage(self, query: str, answer: str) -> tuple[int, int, float]:
         tokens_in = max(1, (len(query) + 3) // 4)

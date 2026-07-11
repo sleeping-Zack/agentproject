@@ -68,3 +68,13 @@ def test_closed_channel_keeps_replay_for_reconnect():
     assert bus.consume("req-closed", timeout=1.0).event_type == "run_completed"
     assert bus.consume("req-closed", timeout=1.0) == "closed"
     assert bus.replay("req-closed", after_sequence=0)[0].payload["answer"] == "ok"
+
+
+def test_expired_channel_identity_does_not_block_request_id_reuse():
+    bus = EventBus(retention_seconds=0.0)
+    bus.open("req-expired", identity={"tenant_id": "tenant-a"})
+    bus.close("req-expired")
+    time.sleep(0.001)
+
+    assert bus.identity("req-expired") is None
+    assert bus.open("req-expired", identity={"tenant_id": "tenant-b"}) is True

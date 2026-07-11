@@ -10,17 +10,17 @@
 
 ## 1. 功能概览
 
-- **RAG 知识库**：从 `data/` 中的 PDF / TXT 构建 Chroma 向量库，支持检索、hybrid rank、RAG 注入过滤和引用来源。
+- **RAG 知识库**：从 `data/` 中的 PDF / TXT 构建 Chroma 向量库，以真实 Dense 分数和中文 BM25 双路召回，经 RRF 融合及可选 Cross-Encoder 精排后生成 evidence 与引用。
 - **多工具 Agent**：支持知识库检索、天气、用户位置、用户 ID、当前月份、使用记录查询和报告上下文切换。
 - **Harness 控制层**：统一 `AgentRunner` / `AgentState`，支持预算停止、动态工具策略、真实审批、答案验证、artifact 存储和诊断 trace。
-- **动态工具治理**：`ToolRegistry` 管工具元数据，`ToolPolicy` 按 tenant / role / scene / tool / args 决策 `allow / deny / need_approval / need_redaction`。
+- **动态工具治理**：`ToolRegistry` 管工具元数据，`ToolPolicy` 从版本化 YAML 加载 tenant / role / scene / tool / args 规则，输出可审计的 `allow / deny / need_approval / need_redaction` 决策。
 - **真实 HITL 审批**：敏感工具如 `fetch_external_data` 会进入 `SQLiteApprovalStore`，普通用户需审批，operator / admin 可审批。
-- **答案质量闸门**：`AnswerVerifier` 检查 evidence、引用、空答案，并可接入 `LLMJudge` 评估 correctness / faithfulness / completeness。
+- **答案质量闸门**：`AnswerVerifier` 依次执行结构校验、Claim-Evidence 对齐与危险结论检测，仅在高风险或低置信时选择性调用 `LLMJudge`。
 - **产物留存**：`SQLiteArtifactStore` 按 request_id 保存 final answer、verification failure、evidence、tool results 等运行产物。
 - **服务化入口**：FastAPI 暴露 `/chat`、`/chat/stream`、`/harness/run`、审批、artifact、MCP、trace、metrics、judge 等接口。
 - **MCP 工具服务**：支持 JSON-RPC `initialize`、`tools/list`、`tools/call`；MCP 工具调用同样经过 ToolPolicy 和审批存储。
-- **可观测性**：包含 request/tool/model trace、diagnostic event、OpenTelemetry 风格 span、Prometheus 文本指标和 SSE 外观。
-- **评测门禁**：Agent golden set 支持 pass_rate、tool_recall、keyword_recall、P95 延迟、平均成本和失败 bucket 拆解。
+- **可观测性**：包含 request/tool/model trace、diagnostic event、OpenTelemetry 风格 span、Prometheus 指标，以及带序号、心跳、背压和断线重放的实时 SSE 事件流。
+- **评测门禁**：PR 运行 30 条冻结真实检索排名和 62 条离线 Agent golden，校验固定阈值及相对基线退化；真实模型评测由独立工作流定期执行。
 
 ---
 
@@ -71,7 +71,7 @@ python mcp_server.py
 | `GET /health` | 健康检查 |
 | `GET /tools/manifest` | 导出工具 manifest |
 | `POST /chat` | 兼容聊天入口，内部走 Harness |
-| `POST /chat/stream` | SSE 外观接口，返回 harness 最终结果 |
+| `POST /chat/stream` | 实时 SSE 事件流，支持 token、工具、审批、验证、artifact、心跳与重连重放 |
 | `POST /harness/run` | 推荐生产入口，返回 status / approval_id / verifier / artifacts |
 | `GET /approvals/{approval_id}` | 查询审批记录 |
 | `POST /approvals/{approval_id}/approve` | 审批通过，仅 operator / admin |
@@ -90,7 +90,7 @@ python mcp_server.py
 
 - `/harness/run` 是推荐的生产控制入口。
 - `/chat` 保留兼容旧调用方，但内部已经调用 `AgentRunner`，不会绕过审批、artifact、trace 和 verifier。
-- `/chat/stream` 是 SSE 外观接口，当前以 harness 最终结果发送 `answer/done` 事件，不再直接暴露旧 ReAct stream。
+- `/chat/stream` 统一输出 `AgentEvent`；客户端可携带同一 `request_id` 与 `Last-Event-ID` 恢复遗漏事件，跨租户、跨会话或不同 query 复用 request_id 会被拒绝。
 - `/mcp tools/call` 由 `MCPToolServer` 执行 ToolPolicy；调用 `fetch_external_data` 等敏感工具时会返回 `pending_approval` 和 `approval_id`，审批通过且参数匹配后才执行。
 - `user_role` 不信任 request body，服务端从 `X-User-Role` 等 auth header 中解析；`approve/deny` 需要 `operator` 或 `admin`。
 
@@ -205,7 +205,7 @@ flowchart TB
     Runner --> TraceStart["ensure_trace"]
     TraceStart --> Scene["resolve_scene\n默认 / report"]
     Scene --> State["创建 AgentState"]
-    State --> BudgetCheck["Budget.can_continue"]
+    State --> BudgetCheck["BudgetManager preflight + reserve"]
 
     BudgetCheck -->|超预算| Blocked["status=blocked"]
     BudgetCheck -->|未超预算| Sensitive["handle_sensitive_report_data"]
@@ -218,7 +218,7 @@ flowchart TB
     Pending --> ReturnPending["返回 pending_approval\napproval_id"]
 
     Backend --> Usage["抽取 evidence / tool_results / usage"]
-    Usage --> BudgetRecord["record_tokens / record_cost / record_tool_call"]
+    Usage --> BudgetRecord["commit reservation\nactual tokens / cost / tool calls"]
     BudgetRecord --> Verifier["AnswerVerifier.verify"]
 
     Verifier -->|retry| Backend
@@ -441,7 +441,7 @@ flowchart LR
     Middleware --> Cache["ToolCallCache"]
     Middleware --> Retry["RetryPolicy"]
     Middleware --> Trace["TraceRecorder\nargs_hash + redacted_args"]
-    Middleware --> Event["EventBus\ntool_start/tool_end/approval_required"]
+    Middleware --> Event["EventBus\ntool_started/tool_completed/tool_failed"]
 
     Cache -->|hit| ReturnCache["返回缓存 ToolMessage"]
     Retry --> RealTool["真实工具函数"]
@@ -473,17 +473,21 @@ flowchart TB
     Splitter --> Meta["metadata\nsource / chunk_version / chunk_index / doc_id"]
     Meta --> Chroma["Chroma 向量库\nstorage/chroma"]
 
-    Query["用户问题"] --> Retriever["Retriever k=3"]
-    Chroma --> Retriever
-    Retriever --> Hybrid["hybrid_rank\n关键词 + 向量重排"]
-    Hybrid --> Safety["RAG 注入过滤"]
+    Query["用户问题"] --> Dense["Dense Retrieval\n真实 relevance score"]
+    Query --> BM25["BM25 Retrieval\njieba 中文分词"]
+    Chroma --> Dense
+    Chroma --> BM25
+    Dense --> RRF["Reciprocal Rank Fusion"]
+    BM25 --> RRF
+    RRF --> Rerank["可选 Cross-Encoder Rerank"]
+    Rerank --> Safety["RAG 注入过滤"]
     Safety --> Prompt["RAG Prompt\ninput + context"]
     Prompt --> LLM["Chat Model"]
     LLM --> Answer["答案 + 引用来源"]
     Safety --> Evidence["trace rag_evidence\n供 verifier 使用"]
 ```
 
-RAG 问答由 `RagSummarizeService` 实现：先从 Chroma 检索，再经过 `hybrid_rank` 重排，对检索内容做 RAG 注入检测，最后将 query 和 context 填入 RAG prompt 调用模型，并在答案后附加引用来源。
+RAG 问答由 `RagSummarizeService` 实现：Dense 与 BM25 分别产生带真实分数和排名的 `RetrievalCandidate`，RRF 在不混用分值尺度的前提下融合候选，可选 reranker 对融合头部精排；最终 evidence 经过注入检测后进入 RAG prompt，并生成稳定文档 ID 的引用。
 
 ---
 
@@ -630,9 +634,11 @@ flowchart TB
     Trace --> Export1["/traces/{request_id}"]
     Trace --> Export2["/traces/{request_id}/otel"]
 
-    ToolMiddleware["工具中间件"] --> EventBus["EventBus"]
-    EventBus --> Events["tool_start / tool_end / approval_required"]
-    Events --> SSE["/chat/stream SSE 外观"]
+    Runner["AgentRunner"] --> EventBus["EventBus\n有界队列 + replay buffer"]
+    ToolMiddleware["工具中间件"] --> EventBus
+    ReactStream["模型 token stream"] --> EventBus
+    EventBus --> Events["run / token / tool / approval / verifier / artifact / heartbeat"]
+    Events --> SSE["/chat/stream\nid + event + data"]
 
     Runtime["运行过程"] --> Metrics["MetricsRegistry"]
     Metrics --> Prom["/metrics Prometheus text"]
@@ -644,7 +650,7 @@ flowchart TB
 - **Trace**：定位单次请求走过哪些步骤。
 - **Diagnostic event**：解释 Harness 为什么拦截、审批、重试、拒答或完成。
 - **Metrics**：观察整体请求量、延迟、工具调用、RAG 评分、token 等趋势。
-- **EventBus**：给 SSE 和调试界面输出工具事件、审批事件。
+- **EventBus**：为每个 request 维护严格递增序号、有界 live queue 和短期 replay buffer；慢消费者触发背压取消，断线客户端用 `Last-Event-ID` 重放。
 
 ---
 
@@ -662,7 +668,7 @@ flowchart LR
     Breaker -->|OPEN| Fallback["短路返回兜底 ToolMessage"]
 
     RAGQuery["RAG Query"] --> Semantic["SemanticCache\nembedding 近似命中"]
-    Semantic -->|命中| CachedAnswer["返回缓存答案"]
+    Semantic -->|命中| CachedAnswer["恢复完整 RagResult\nanswer + evidence + citations"]
     Semantic -->|未命中| RAGFlow["正常 RAG 检索生成"]
 ```
 
@@ -671,7 +677,7 @@ flowchart LR
 - 工具调用先过策略，再考虑缓存、重试、超时、熔断。
 - `ToolCallCache` 只缓存成功的 `ToolMessage`，避免缓存有副作用的 `Command`。
 - `CircuitBreaker` 实现 `CLOSED -> OPEN -> HALF_OPEN -> CLOSED` 三态保护。
-- RAG 可启用 `SemanticCache`，相似问题命中后跳过检索和生成。
+- RAG 可启用 `SemanticCache`，缓存完整 `RagResult`；key 隔离 tenant、知识库、语料、prompt、检索和模型版本，避免缓存命中丢失 evidence/citation 或知识库更新后返回旧答案。
 
 ---
 
@@ -679,37 +685,30 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    Golden["evals/agent_golden.jsonl"] --> Eval["scripts/evaluate_agent.py"]
-    Eval --> Mode["mode: agent / harness"]
-    Eval --> RunCases["逐条执行 case"]
-    RunCases --> TraceTools["从 trace 统计 actual_tools"]
-    RunCases --> Keywords["关键词命中率"]
-    RunCases --> Reject["安全拒绝率"]
-    RunCases --> Latency["P50 / P95 延迟"]
-    RunCases --> Cost["平均成本"]
+    RetrievalGolden["30-case retrieval golden"] --> RetrievalEval["冻结真实排名评测"]
+    RetrievalFixture["Dense / Hybrid fixture"] --> RetrievalEval
+    RetrievalBaseline["retrieval baseline"] --> RetrievalEval
 
-    Latency --> Gate["EvalGate"]
-    Cost --> Gate
-    TraceTools --> Gate
-    Keywords --> Gate
-    Reject --> Gate
+    AgentGolden["62-case offline Agent golden"] --> AgentEval["完整 AgentRunner 离线执行"]
+    AgentBaseline["agent baseline"] --> AgentEval
 
-    Gate --> Thresholds["pass_rate / tool_recall / keyword_recall / p95 / avg_cost"]
-    Gate --> Breakdown["rag / tool / report / safety bucket 失败分布"]
-    Gate --> Report["storage/agent_eval_report.json"]
+    RetrievalEval --> Gate["固定阈值 + baseline delta"]
+    AgentEval --> Gate
+    Gate --> CI["PR blocking CI"]
+    Online["真实模型 / 真实向量库"] --> Scheduled["定期与手动报告\n不阻断 PR"]
 ```
 
 常用命令：
 
 ```powershell
 python -m pytest tests -q
-python scripts/evaluate_rag.py
-python scripts/evaluate_agent.py --dry-run
-python scripts/evaluate_agent.py --mode harness --gate --report storage/agent_eval_report.json
+python -m ruff check .
+python scripts/evaluate_retrieval.py --fixture evals/fixtures/retrieval_rankings_v1.json --baseline evals/baselines/retrieval_baseline_v1.json --gate
+python scripts/evaluate_agent.py --golden evals/agent_offline_golden.jsonl --mode harness --offline --baseline evals/baselines/agent_baseline_v1.json --gate --min-case-count 60
 python scripts/benchmark_api.py --url http://127.0.0.1:8000/chat --api-key dev-api-key
 ```
 
-`EvalGate` 不只看整体 pass_rate，还检查 tool_recall、keyword_recall、P95 延迟和平均成本，并按 bucket 拆分失败原因。
+PR 门禁同时检查检索 Recall / Precision / MRR / nDCG、Agent pass rate、工具与参数准确率、引用有效性、artifact、P95 延迟和相对基线退化；在线工作流再补充真实模型、真实 embedding 与可选 reranker 的质量报告。
 
 ---
 
@@ -725,7 +724,7 @@ flowchart LR
     Runner --> Backend["ReactAgentBackend"]
     Backend --> Agent["ReactAgent"]
     Agent --> Tool["rag_summarize"]
-    Tool --> RAG["Chroma 检索 + hybrid_rank"]
+    Tool --> RAG["Dense + BM25 + RRF + 可选 Rerank"]
     RAG --> Answer["生成带引用答案"]
     Answer --> Verifier["AnswerVerifier"]
     Verifier --> Artifact["final-answer artifact"]
@@ -773,12 +772,12 @@ flowchart LR
 | `api/server.py` | FastAPI 服务入口，集成 auth、harness、approval、artifact、MCP、trace、metrics、judge |
 | `agent/react_agent.py` | ReAct Agent 执行面，封装 LangChain create_agent、tools、middleware、memory |
 | `agent/runner.py` | Harness 控制核心：AgentRunner、AgentTask、AgentBackendResult、ReactAgentBackend |
-| `agent/state.py` | AgentState、Budget、StepRecord、Observation、ToolCallRecord、ArtifactRef |
-| `agent/policies.py` | ToolPolicy、PlanValidator、Replanner |
+| `agent/state.py` / `agent/budget.py` | AgentState、统一 BudgetManager、预算预留与提交、StepRecord、Observation、ToolCallRecord |
+| `agent/policies.py` / `config/tool_policy.yml` | 版本化、按租户加载且可审计的 ToolPolicy，以及 PlanValidator、Replanner |
 | `agent/verifier.py` | AnswerVerifier 与 VerifyResult |
 | `agent/tools/` | LangChain 工具、工具注册表、中间件、重试策略 |
 | `agent/workflows/` | 显式业务工作流，目前核心是个人使用报告生成 |
-| `rag/` | Chroma 向量库、RAG 检索总结、引用、评测辅助、EvalGate |
+| `rag/` | Chroma、Dense/BM25/RRF/Rerank、完整语义缓存、RAG 生成、引用与评测 |
 | `model/` | 模型工厂、Provider 抽象、多模型路由 |
 | `services/approval_store.py` | SQLite 审批状态存储 |
 | `services/artifact_store.py` | SQLite 运行产物存储 |
@@ -823,19 +822,19 @@ docker run --env-file .env -p 8000:8000 sweeper-agent
 
 第三，**执行面和控制面解耦**。`ReactAgent` 继续负责 ReAct 推理和工具调用，`ReactAgentBackend` 作为适配层接入 Harness，后续可替换为其他 Agent 框架。
 
-第四，**RAG 有完整工程链路**。包括文档加载、MD5 去重、chunk 切分、metadata、Chroma 存储、检索、hybrid rank、RAG 注入过滤、引用来源、evidence trace 和评测集。
+第四，**RAG 有完整工程链路**。包括文档加载、指纹去重、chunk 与稳定 ID、Chroma Dense、中文 BM25、RRF、可选 Cross-Encoder、注入过滤、完整结果缓存、引用、evidence trace 和真实检索评测。
 
 第五，**工具体系生产化**。工具有 manifest、scope、risk_level、side_effect、requires_approval、timeout_seconds、allowlist、ToolPolicy、缓存、重试、超时、熔断和 trace。
 
-第六，**质量可以被量化**。Agent 评测支持 golden set、工具命中率、关键词命中率、安全拒绝率、P95 延迟、平均成本和失败 bucket。
+第六，**质量可以被量化且阻断退化**。PR 对 30 条检索案例和 62 条 Agent 案例执行确定性门禁，并同时比较固定阈值与版本化 baseline；线上模型评测独立运行并产出 artifact。
 
 ---
 
 ## 24. 当前边界与后续演进
 
 - 当前存储使用 SQLite，适合本地演示和轻量部署；生产环境建议迁移到 Postgres / MySQL，并把缓存、限流和审批短期状态接 Redis。
-- `/chat/stream` 当前是 harness 最终结果的 SSE 外观，不是逐 token 透传旧 ReAct stream；如果需要更强实时体验，可把 backend chunk 与 harness 状态事件统一流式化。
+- `/chat/stream` 已统一模型 token 与 Harness 状态事件；当前 EventBus 是单进程实现，多实例部署应替换为 Redis Streams、NATS 或 Kafka，并共享 replay 状态。
 - 审批目前以工具级和场景级控制为主；后续可下沉到真实 user_id / month / 参数级审批，并增加审批过期、一次性消费和审批范围校验。
-- Budget 已接入 steps、tool calls、tokens、cost 的结构；真实 token / cost 依赖模型 provider 的 usage 质量，可进一步统一在 ModelRouter 层采集。
-- ToolPolicy 当前是代码规则；生产环境可升级为 RBAC / ABAC 配置中心，按租户动态下发策略。
+- Budget 已在调用前预留模型 token/cost 与工具次数，并让 Planner 子任务共享总预算；真实结算精度仍取决于模型 provider 的 usage 元数据。
+- ToolPolicy 已由版本化 YAML 按租户、角色、场景和参数约束加载；大规模生产环境可继续迁移到集中式 RBAC/ABAC 策略服务。
 - Trace 当前是内存 + SQLite payload；生产环境可接 OpenTelemetry Collector、Jaeger、Tempo 或日志平台。

@@ -47,7 +47,7 @@ jobs:
         run: >-
           python scripts/evaluate_agent.py
           --mode harness
-          --golden evals/agent_golden.jsonl
+          --golden evals/agent_offline_golden.jsonl
           --report reports/agent-online.json
       - name: Upload quality reports
         if: always()

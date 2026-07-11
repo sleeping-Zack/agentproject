@@ -508,7 +508,14 @@ def _compare_baseline(aggregate: Dict, latency: Dict, baseline_path: Optional[st
     allowed = baseline.get("allowed_regression") or {}
     deltas = {}
     failures = []
-    for metric in ("pass_rate", "tool_recall", "keyword_recall", "parameter_accuracy"):
+    for metric in (
+        "pass_rate",
+        "tool_recall",
+        "keyword_recall",
+        "parameter_accuracy",
+        "citation_validity",
+        "artifact_save_rate",
+    ):
         delta = round(float(aggregate.get(metric, 0.0)) - float(expected.get(metric, 0.0)), 4)
         deltas[metric] = delta
         if delta < -float(allowed.get(metric, 0.0)):

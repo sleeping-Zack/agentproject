@@ -128,10 +128,12 @@ class EventBus:
 
     def exists(self, request_id: str) -> bool:
         with self._lock:
+            self._cleanup_locked(time.time())
             return request_id in self._channels
 
     def identity(self, request_id: str) -> Optional[Dict[str, str]]:
         with self._lock:
+            self._cleanup_locked(time.time())
             channel = self._channels.get(request_id)
             return dict(channel.identity) if channel is not None else None
 

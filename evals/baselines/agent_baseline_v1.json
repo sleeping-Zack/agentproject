@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "6b5f967",
+  "generated_at": "2026-07-11T13:08:57.025455+00:00",
+  "golden": "evals/agent_offline_golden.jsonl",
+  "case_count": 62,
+  "aggregate": {
+    "case_count": 62,
+    "pass_rate": 1.0,
+    "tool_recall": 1.0,
+    "keyword_recall": 1.0,
+    "parameter_accuracy": 1.0,
+    "citation_validity": 1.0,
+    "artifact_save_rate": 1.0
+  },
+  "p95_latency_ms": 5.008,
+  "allowed_regression": {
+    "pass_rate": 0.02,
+    "tool_recall": 0.02,
+    "keyword_recall": 0.02,
+    "parameter_accuracy": 0.02,
+    "citation_validity": 0.02,
+    "artifact_save_rate": 0.0,
+    "p95_latency_ms": 500.0
+  }
+}

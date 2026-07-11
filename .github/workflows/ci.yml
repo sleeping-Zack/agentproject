@@ -4,11 +4,17 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
@@ -18,18 +24,37 @@ jobs:
           pip install -e ".[dev]"
       - name: Run tests
         run: python -m pytest tests -q
-      - name: Retrieval eval smoke (schema check only)
-        # 检索评测需要真实向量库和 embedding，CI 只做 schema/import 校验
-        run: |
-          if [ -f evals/retrieval_golden.jsonl ]; then
-            python scripts/evaluate_retrieval.py --schema-check
-          else
-            echo "retrieval_golden.jsonl 不存在，跳过检索评测（需先运行 generate_retrieval_golden.py 并审校）"
-          fi
-      - name: Agent eval smoke (dry-run, validates golden set + script)
-        run: python scripts/evaluate_agent.py --dry-run
-      - name: Harness eval smoke (mock/offline)
+      - name: Static analysis
+        run: python -m ruff check .
+      - name: Validate retrieval provenance
+        run: python scripts/validate_retrieval_manifest.py
+      - name: Offline retrieval regression
+        run: >-
+          python scripts/evaluate_retrieval.py
+          --golden evals/retrieval_golden.jsonl
+          --fixture evals/fixtures/retrieval_rankings_v1.json
+          --baseline evals/baselines/retrieval_baseline_v1.json
+          --gate
+          --min-recall 0.90
+          --min-precision 0.15
+          --min-mrr 0.90
+          --min-ndcg 0.90
+          --report reports/retrieval-offline.json
+      - name: Offline agent regression (62 cases)
         env:
           MODEL_PROVIDER: mock
-          CI_SMOKE_LIMIT: "1"
-        run: python scripts/evaluate_agent.py --mode harness --smoke --gate --min-pass-rate 0.0 --min-tool-recall 0.0 --min-keyword-recall 0.0
+        run: >-
+          python scripts/evaluate_agent.py
+          --golden evals/agent_offline_golden.jsonl
+          --mode harness
+          --offline
+          --baseline evals/baselines/agent_baseline_v1.json
+          --gate
+          --min-pass-rate 0.90
+          --min-tool-recall 0.85
+          --min-keyword-recall 0.80
+          --min-parameter-accuracy 0.90
+          --min-citation-validity 0.90
+          --min-case-count 60
+          --max-p95-latency-ms 2000
+          --report reports/agent-offline.json

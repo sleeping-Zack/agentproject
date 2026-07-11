@@ -17,7 +17,13 @@ def test_evaluate_agent_script_accepts_harness_mode_in_dry_run():
     assert payload["mode"] == "harness"
 
 
-def test_ci_runs_harness_smoke_eval():
+def test_ci_runs_full_offline_harness_gate():
     workflow = open(".github/workflows/ci.yml", encoding="utf-8").read()
 
-    assert "scripts/evaluate_agent.py --mode harness --smoke" in workflow
+    assert "scripts/evaluate_agent.py" in workflow
+    assert "--mode harness" in workflow
+    assert "--offline" in workflow
+    assert "--golden evals/agent_offline_golden.jsonl" in workflow
+    assert "--baseline evals/baselines/agent_baseline_v1.json" in workflow
+    assert "--min-case-count 60" in workflow
+    assert "--smoke" not in workflow

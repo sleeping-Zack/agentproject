@@ -21,6 +21,10 @@ class EventBackpressureError(RuntimeError):
     pass
 
 
+class EventStreamConflictError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class AgentEvent:
     request_id: str
@@ -56,6 +60,7 @@ StreamEvent = AgentEvent
 class _Channel:
     events: queue.Queue
     replay: Deque[AgentEvent]
+    identity: Dict[str, str] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
     cancelled: threading.Event = field(default_factory=threading.Event)
     next_sequence: int = 1
@@ -94,12 +99,41 @@ class EventBus:
                 self._channels[request_id] = channel
             return channel
 
-    def open(self, request_id: str) -> None:
-        self._get_channel(request_id)
+    def open(
+        self,
+        request_id: str,
+        identity: Optional[Dict[str, str]] = None,
+    ) -> bool:
+        """Atomically create a channel and return whether this caller owns production."""
+        now = time.time()
+        normalized_identity = dict(identity or {})
+        with self._lock:
+            self._cleanup_locked(now)
+            channel = self._channels.get(request_id)
+            if channel is None:
+                self._channels[request_id] = _Channel(
+                    events=queue.Queue(maxsize=self.queue_size),
+                    replay=deque(maxlen=self.replay_size),
+                    identity=normalized_identity,
+                    updated_at=now,
+                )
+                return True
+            if channel.identity and normalized_identity != channel.identity:
+                raise EventStreamConflictError(
+                    f"request_id is already bound to another stream: {request_id}"
+                )
+            if normalized_identity and not channel.identity:
+                channel.identity = normalized_identity
+            return False
 
     def exists(self, request_id: str) -> bool:
         with self._lock:
             return request_id in self._channels
+
+    def identity(self, request_id: str) -> Optional[Dict[str, str]]:
+        with self._lock:
+            channel = self._channels.get(request_id)
+            return dict(channel.identity) if channel is not None else None
 
     def channel(self, request_id: str) -> queue.Queue:
         """兼容旧调用；业务代码应使用 publish/consume。"""
@@ -170,6 +204,11 @@ class EventBus:
 
     def is_cancelled(self, request_id: str) -> bool:
         return self._get_channel(request_id).cancelled.is_set()
+
+    def is_closed(self, request_id: str) -> bool:
+        channel = self._get_channel(request_id)
+        with channel.lock:
+            return channel.closed
 
     def discard(self, request_id: str) -> None:
         with self._lock:

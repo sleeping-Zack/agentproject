@@ -30,6 +30,7 @@ from agent.tools.middleware import (
 from agent.workflows.report_workflow import ReportWorkflow
 from model.factory import chat_model
 from observability.context import bind_request_context
+from observability.event_bus import EventBackpressureError, event_bus
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
 from safety.security import UnsafeInputError, assert_safe_user_input
@@ -155,7 +156,8 @@ class ReactAgent:
                        max_tool_calls: Optional[int] = None,
                        budget_manager: Optional[BudgetManager] = None,
                        max_model_output_tokens: Optional[int] = None,
-                       estimated_cost_per_1k_tokens: Optional[float] = None):
+                       estimated_cost_per_1k_tokens: Optional[float] = None,
+                       emit_events: bool = False):
         request_id = request_id or str(uuid4())
         if budget_manager is None and max_tool_calls is not None:
             budget_manager = BudgetManager(max_tool_calls=max_tool_calls)
@@ -193,17 +195,39 @@ class ReactAgent:
                         "budget_manager": budget_manager,
                         "max_model_output_tokens": max_model_output_tokens,
                         "estimated_cost_per_1k_tokens": estimated_cost_per_1k_tokens,
+                        "emit_events": emit_events,
                     }
-                    for chunk in self.agent.stream(
+                    for part in self.agent.stream(
                             input_dict,
-                            stream_mode="values",
+                            stream_mode=["messages", "updates"],
                             context=runtime_context,
+                            version="v2",
                     ):
-                        latest_message = chunk["messages"][-1]
-                        self._record_model_usage(request_id, latest_message)
-                        if latest_message.content:
-                            latest_response = latest_message.content.strip() + "\n"
+                        if emit_events and event_bus.is_cancelled(request_id):
+                            break
+                        part_type = part.get("type") if isinstance(part, dict) else None
+                        if part_type == "messages":
+                            message, _metadata = part["data"]
+                            self._record_model_usage(request_id, message)
+                            delta = self._message_text(message)
+                            if not delta:
+                                continue
+                            latest_response += delta
+                            self._publish_token(request_id, delta, emit_events)
                             yield latest_response
+                            continue
+                        if part_type == "updates":
+                            for update in (part.get("data") or {}).values():
+                                messages = update.get("messages", []) if isinstance(update, dict) else []
+                                if not messages:
+                                    continue
+                                latest_message = messages[-1]
+                                self._record_model_usage(request_id, latest_message)
+                                full_text = self._message_text(latest_message)
+                                if full_text and not latest_response:
+                                    latest_response = full_text
+                                    self._publish_token(request_id, full_text, emit_events)
+                                    yield latest_response
             except Exception:
                 metrics_registry.inc_request(status="error")
                 metrics_registry.observe_request_latency(metrics_registry.elapsed_ms(request_start))
@@ -214,6 +238,35 @@ class ReactAgent:
             else:
                 metrics_registry.inc_request(status="empty")
             metrics_registry.observe_request_latency(metrics_registry.elapsed_ms(request_start))
+
+    @staticmethod
+    def _message_text(message) -> str:
+        text = getattr(message, "text", None)
+        if isinstance(text, str) and text:
+            return text
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                str(block.get("text", ""))
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        return ""
+
+    @staticmethod
+    def _publish_token(request_id: str, delta: str, emit_events: bool) -> None:
+        if not emit_events or not event_bus.exists(request_id):
+            return
+        try:
+            event_bus.publish(
+                request_id,
+                "token_delta",
+                {"delta": delta, "provisional": True},
+            )
+        except (EventBackpressureError, RuntimeError):
+            return
 
     def _record_model_usage(self, request_id: str, message) -> None:
         usage = getattr(message, "usage_metadata", None) or {}

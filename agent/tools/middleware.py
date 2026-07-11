@@ -23,7 +23,7 @@ from agent.budget import BudgetExceeded, BudgetManager, Reservation
 from agent.policies import PolicyAction, ToolPolicy
 from agent.tools.registry import build_default_tool_registry
 from agent.tools.retry import RetryPolicy, run_with_retry
-from observability.event_bus import event_bus
+from observability.event_bus import EventBackpressureError, event_bus
 from observability.tracing import trace_recorder
 from observability.metrics import metrics_registry
 from services.cache import tool_call_cache
@@ -72,12 +72,19 @@ def monitor_tool(
     user_role = request.runtime.context.get("user_role", "user")
     scene = request.runtime.context.get("scene", "default")
     approval_id = request.runtime.context.get("approval_id")
+    emit_events = bool(request.runtime.context.get("emit_events"))
 
     budget_manager = _get_budget_manager(request.runtime.context)
     if budget_manager is not None:
         try:
             budget_manager.check_deadline()
         except BudgetExceeded:
+            _publish_tool_event(
+                request_id,
+                emit_events,
+                "tool_failed",
+                {"tool": tool_name, "status": "budget_exceeded"},
+            )
             return _tool_budget_message(tool_name, request.tool_call.get("id", ""))
     else:
         # Compatibility for direct middleware users that still provide only
@@ -88,6 +95,12 @@ def monitor_tool(
             tool_call_id=request.tool_call.get("id", ""),
         )
         if budget_result is not None:
+            _publish_tool_event(
+                request_id,
+                emit_events,
+                "tool_failed",
+                {"tool": tool_name, "status": "budget_exceeded"},
+            )
             return budget_result
 
     policy_result = _enforce_tool_policy(
@@ -99,6 +112,7 @@ def monitor_tool(
         user_role=user_role,
         scene=scene,
         approval_id=approval_id,
+        emit_events=emit_events,
     )
     if policy_result is not None:
         return policy_result
@@ -110,6 +124,12 @@ def monitor_tool(
     )
     if not breaker.allow():
         metrics_registry.inc_tool_call(tool_name, status="short_circuit")
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_failed",
+            {"tool": tool_name, "status": "short_circuit"},
+        )
         logger.warning(f"[tool monitor]工具{tool_name}熔断打开，跳过实际调用")
         return ToolMessage(
             content=f"工具 {tool_name} 当前不可用（熔断保护中），请稍后重试或换一种方式回答用户。",
@@ -147,19 +167,24 @@ def monitor_tool(
         )
 
     start = metrics_registry.now()
-    if request_id:
-        event_bus.publish(request_id, "tool_start",
-                          {"tool": tool_name, "args": redacted_args})
+    _publish_tool_event(
+        request_id,
+        emit_events,
+        "tool_started",
+        {"tool": tool_name, "args": redacted_args},
+    )
 
     # 幂等缓存：相同 tool+args 在 TTL 窗口内复用上次结果，跳过实际调用
     cache_args = request.tool_call.get("args", {})
     cached = tool_call_cache.get(tool_name, cache_args)
     if cached is not None:
         metrics_registry.inc_tool_call(tool_name, status="cache_hit")
-        if request_id:
-            event_bus.publish(request_id, "tool_end",
-                              {"tool": tool_name, "status": "cache_hit",
-                               "duration_ms": 0.0})
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_completed",
+            {"tool": tool_name, "status": "cache_hit", "duration_ms": 0.0},
+        )
         return cached
 
     try:
@@ -172,10 +197,12 @@ def monitor_tool(
         elapsed = metrics_registry.elapsed_ms(start)
         metrics_registry.observe_tool_latency(tool_name, elapsed)
         logger.info(f"[tool monitor]工具{tool_name}调用成功")
-        if request_id:
-            event_bus.publish(request_id, "tool_end",
-                              {"tool": tool_name, "status": "success",
-                               "duration_ms": round(elapsed, 2)})
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_completed",
+            {"tool": tool_name, "status": "success", "duration_ms": round(elapsed, 2)},
+        )
         # 只缓存成功的 ToolMessage；Command 类型有副作用不缓存
         if isinstance(result, ToolMessage):
             tool_call_cache.set(tool_name, cache_args, result)
@@ -186,13 +213,22 @@ def monitor_tool(
         return result
     except BudgetExceeded:
         metrics_registry.inc_tool_call(tool_name, status="budget_exceeded")
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_failed",
+            {"tool": tool_name, "status": "budget_exceeded"},
+        )
         return _tool_budget_message(tool_name, request.tool_call.get("id", ""))
     except CircuitOpenError as exc:
         metrics_registry.inc_tool_call(tool_name, status="short_circuit")
         logger.warning(f"[tool monitor]工具{tool_name}熔断短路：{exc}")
-        if request_id:
-            event_bus.publish(request_id, "tool_end",
-                              {"tool": tool_name, "status": "short_circuit"})
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_failed",
+            {"tool": tool_name, "status": "short_circuit"},
+        )
         return ToolMessage(
             content=f"工具 {tool_name} 当前不可用（熔断保护中）。",
             tool_call_id=request.tool_call.get("id", ""),
@@ -203,10 +239,13 @@ def monitor_tool(
         metrics_registry.inc_tool_call(tool_name, status="timeout")
         elapsed = metrics_registry.elapsed_ms(start)
         metrics_registry.observe_tool_latency(tool_name, elapsed)
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_failed",
+            {"tool": tool_name, "status": "timeout", "duration_ms": round(elapsed, 2)},
+        )
         if request_id:
-            event_bus.publish(request_id, "tool_end",
-                              {"tool": tool_name, "status": "timeout",
-                               "duration_ms": round(elapsed, 2)})
             trace_recorder.record_diagnostic_event(
                 request_id=request_id,
                 step_id="tool-timeout",
@@ -227,10 +266,12 @@ def monitor_tool(
         metrics_registry.inc_tool_call(tool_name, status="failure")
         metrics_registry.observe_tool_latency(tool_name, metrics_registry.elapsed_ms(start))
         logger.error(f"工具{tool_name}调用失败，原因：{exc}")
-        if request_id:
-            event_bus.publish(request_id, "tool_end",
-                              {"tool": tool_name, "status": "failure",
-                               "error": str(exc)})
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_failed",
+            {"tool": tool_name, "status": "failure", "error": str(exc)},
+        )
         return ToolMessage(
             content=f"工具调用失败：{exc}。请向用户说明无法获取该数据或换一种方式。",
             tool_call_id=request.tool_call.get("id", ""),
@@ -282,6 +323,7 @@ def _enforce_tool_policy(
     user_role: str,
     scene: str,
     approval_id: str | None,
+    emit_events: bool = False,
 ) -> ToolMessage | None:
     decision = tool_policy.decide(
         tenant_id=tenant_id,
@@ -294,6 +336,12 @@ def _enforce_tool_policy(
         return None
     if decision.action == PolicyAction.DENY:
         metrics_registry.inc_tool_call(tool_name, status="denied")
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_failed",
+            {"tool": tool_name, "status": "denied", "reason": decision.reason},
+        )
         return ToolMessage(
             content=f"工具调用被拒绝：{decision.reason}",
             tool_call_id=tool_call_id,
@@ -301,6 +349,12 @@ def _enforce_tool_policy(
         )
     if decision.action == PolicyAction.NEED_REDACTION:
         metrics_registry.inc_tool_call(tool_name, status="denied")
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_failed",
+            {"tool": tool_name, "status": "redaction_required"},
+        )
         return ToolMessage(
             content="工具参数包含敏感字段，已拒绝执行。",
             tool_call_id=tool_call_id,
@@ -344,8 +398,9 @@ def _enforce_tool_policy(
             args=tool_args,
             reason=decision.reason,
         )
-        event_bus.publish(
+        _publish_tool_event(
             request_id,
+            emit_events,
             "approval_required",
             {"tool": tool_name, "approval_id": approval.approval_id},
         )
@@ -359,6 +414,21 @@ def _enforce_tool_policy(
         tool_call_id=tool_call_id,
         name=tool_name,
     )
+
+
+def _publish_tool_event(
+    request_id: str | None,
+    emit_events: bool,
+    event_type: str,
+    payload: dict,
+) -> None:
+    if not request_id or not emit_events or not event_bus.exists(request_id):
+        return
+    try:
+        event_bus.publish(request_id, event_type, payload)
+    except (EventBackpressureError, RuntimeError):
+        # Client disconnects and slow consumers must not turn a tool result into a 500.
+        return
 
 
 def _invoke_handler_with_approval(
@@ -403,12 +473,10 @@ def enforce_model_budget(request: ModelRequest, handler: Callable):
         configured_output,
         manager.remaining_output_tokens(estimated_input),
     )
-    cost_per_1k = float(
-        request.runtime.context.get(
-            "estimated_cost_per_1k_tokens",
-            os.getenv("AGENT_ESTIMATED_COST_PER_1K_TOKENS", "0.001"),
-        )
-    )
+    configured_cost = request.runtime.context.get("estimated_cost_per_1k_tokens")
+    if configured_cost is None:
+        configured_cost = os.getenv("AGENT_ESTIMATED_COST_PER_1K_TOKENS", "0.001")
+    cost_per_1k = float(configured_cost)
     if cost_per_1k > 0:
         affordable_total = int((manager.remaining_cost * 1000.0) / cost_per_1k)
         output_cap = min(output_cap, max(0, affordable_total - estimated_input))

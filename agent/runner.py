@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
@@ -10,7 +13,9 @@ from agent.memory import ConversationMemory
 from agent.policies import PolicyAction, ToolPolicy
 from agent.state import AgentState, ArtifactRef, Budget, Observation, ToolCallRecord
 from agent.verifier import AnswerVerifier, VerifyResult
+from observability.event_bus import EventBackpressureError, event_bus
 from observability.tracing import trace_recorder
+from safety.security import UnsafeInputError, assert_safe_user_input
 from services.approval_store import SQLiteApprovalStore
 from services.artifact_store import SQLiteArtifactStore
 from utils.streaming import get_final_response
@@ -25,6 +30,7 @@ class AgentTask:
     scene: str = "default"
     request_id: str = field(default_factory=lambda: str(uuid4()))
     approval_id: Optional[str] = None
+    emit_events: bool = False
 
 
 @dataclass
@@ -82,20 +88,23 @@ class ReactAgentBackend:
                     if state is not None
                     else None
                 ),
+                emit_events=task.emit_events,
             )
         )
         trace_payload = trace_recorder.export_trace(task.request_id)
         evidence = self._extract_evidence(trace_payload)
         tokens_in, tokens_out, cost, cost_mode = self._extract_usage(trace_payload)
-        tool_results = [
-            {
+        tool_results = []
+        for event in trace_payload.get("events", []):
+            if event.get("category") != "tool":
+                continue
+            metadata = event.get("metadata", {})
+            tool_results.append({
                 "tool": event["name"],
                 "status": "error" if event.get("error") else "success",
-                "metadata": event.get("metadata", {}),
-            }
-            for event in trace_payload.get("events", [])
-            if event.get("category") == "tool"
-        ]
+                "args": dict(metadata.get("redacted_args") or {}),
+                "metadata": metadata,
+            })
         return AgentBackendResult(
             answer=get_final_response(chunks),
             evidence=evidence,
@@ -198,6 +207,18 @@ class AgentRunner:
                 deadline_seconds=self.max_duration_seconds,
             ),
         )
+        self._publish_event(
+            task.request_id,
+            "run_started",
+            {"session_id": task.session_id, "scene": scene},
+        )
+        try:
+            assert_safe_user_input(task.query)
+        except UnsafeInputError as exc:
+            refusal = f"请求未执行：{exc}"
+            state.mark_rejected("unsafe_input", refusal)
+            self._record_diagnostic(state, "security", "rejected", failure_reason=str(exc))
+            return self._result(state, refusal)
         initial_budget_error = self._backend_preflight_reason(state, task.query)
         if initial_budget_error is not None:
             state.mark_blocked(initial_budget_error)
@@ -233,6 +254,11 @@ class AgentRunner:
             try:
                 if not self._backend_manages_budget():
                     model_reservation = self._reserve_backend_model_call(state, task.query)
+                self._publish_event(
+                    task.request_id,
+                    "model_started",
+                    {"attempt": attempt, "max_output_tokens": self.max_model_output_tokens},
+                )
                 backend_result = self.backend(task, state)
             except BudgetExceeded as exc:
                 if model_reservation is not None:
@@ -324,13 +350,22 @@ class AgentRunner:
                 state.add_tool_call(
                     ToolCallRecord(
                         tool_name=tool_name,
-                        args={},
+                        args=dict(
+                            tool_result.get("args")
+                            or (tool_result.get("metadata") or {}).get("redacted_args")
+                            or {}
+                        ),
                         status=str(tool_result.get("status", "completed")),
                         result=str(tool_result.get("content", ""))[:500],
                     ),
                     count_budget=False,
                 )
 
+            self._publish_event(
+                task.request_id,
+                "verification_started",
+                {"attempt": attempt, "evidence_count": len(backend_result.evidence)},
+            )
             verifier_result = self.verifier.verify(
                 query=task.query,
                 answer=answer,
@@ -338,6 +373,16 @@ class AgentRunner:
                 scene=scene,
                 tool_results=backend_result.tool_results,
                 artifacts=[artifact.__dict__ for artifact in state.artifacts],
+            )
+            self._publish_event(
+                task.request_id,
+                "verification_completed",
+                {
+                    "attempt": attempt,
+                    "passed": verifier_result.passed,
+                    "action": verifier_result.action,
+                    "score": verifier_result.score,
+                },
             )
             self._record_diagnostic(
                 state,
@@ -365,6 +410,7 @@ class AgentRunner:
                     payload={"answer": answer, "verifier": verifier_result.__dict__},
                 )
                 state.add_artifact(artifact)
+                self._publish_event(task.request_id, "artifact_created", artifact.__dict__)
                 return self._result(state, refusal, verifier_result)
 
         artifact = self._save_artifact(
@@ -379,9 +425,117 @@ class AgentRunner:
             metadata={"scene": scene},
         )
         state.add_artifact(artifact)
+        self._publish_event(task.request_id, "artifact_created", artifact.__dict__)
         state.mark_completed(answer)
         self._record_diagnostic(state, "runner", "completed")
         return self._result(state, answer, verifier_result)
+
+    async def run_stream(
+        self,
+        task: AgentTask,
+        *,
+        last_event_id: int = 0,
+        heartbeat_seconds: float = 10.0,
+        timeout_seconds: Optional[float] = None,
+    ):
+        """Yield live, sequenced events; reconnects replay without re-running."""
+        if last_event_id < 0:
+            raise ValueError("last_event_id must be non-negative")
+        request_id = task.request_id
+        task.emit_events = True
+        owns_producer = event_bus.open(request_id, identity=self.stream_identity(task))
+        producer_task = None
+        if owns_producer:
+            async def produce() -> None:
+                try:
+                    await asyncio.to_thread(self.run, task)
+                except Exception as exc:  # pragma: no cover - defensive boundary
+                    self._publish_event(
+                        request_id,
+                        "run_failed",
+                        {"status": "failed", "error": str(exc)},
+                    )
+                finally:
+                    event_bus.close(request_id)
+
+            producer_task = asyncio.create_task(produce())
+
+        cursor = last_event_id
+        for item in event_bus.replay(request_id, after_sequence=cursor):
+            cursor = item.sequence
+            yield item
+        if event_bus.is_closed(request_id):
+            return
+
+        effective_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else self.max_duration_seconds or 120.0
+        )
+        started = time.monotonic()
+        last_heartbeat = started
+        timed_out = False
+        try:
+            while True:
+                now = time.monotonic()
+                if (
+                    not timed_out
+                    and effective_timeout > 0
+                    and now - started >= effective_timeout
+                ):
+                    timed_out = True
+                    event_bus.cancel(request_id)
+                    self._publish_event(
+                        request_id,
+                        "run_failed",
+                        {"status": "failed", "error": "request_timeout"},
+                    )
+                    event_bus.close(request_id)
+                poll_timeout = 0.5
+                if heartbeat_seconds > 0:
+                    poll_timeout = min(
+                        poll_timeout,
+                        max(0.01, heartbeat_seconds - (now - last_heartbeat)),
+                    )
+                if effective_timeout > 0 and not timed_out:
+                    poll_timeout = min(
+                        poll_timeout,
+                        max(0.01, effective_timeout - (now - started)),
+                    )
+                item = await asyncio.to_thread(
+                    event_bus.consume,
+                    request_id,
+                    poll_timeout,
+                )
+                if item == "closed":
+                    break
+                if item is not None:
+                    if item.sequence > cursor:
+                        cursor = item.sequence
+                        yield item
+                    continue
+                now = time.monotonic()
+                if heartbeat_seconds > 0 and now - last_heartbeat >= heartbeat_seconds:
+                    self._publish_event(
+                        request_id,
+                        "heartbeat",
+                        {"elapsed_ms": round((now - started) * 1000, 1)},
+                    )
+                    last_heartbeat = now
+        except asyncio.CancelledError:
+            event_bus.cancel(request_id)
+            raise
+        finally:
+            if producer_task is not None and producer_task.done():
+                await producer_task
+
+    @staticmethod
+    def stream_identity(task: AgentTask) -> Dict[str, str]:
+        return {
+            "tenant_id": task.tenant_id,
+            "session_id": task.session_id,
+            "query_sha256": hashlib.sha256(task.query.encode("utf-8")).hexdigest(),
+        }
 
     def _handle_sensitive_report_data(
         self,
@@ -451,6 +605,11 @@ class AgentRunner:
                     )
                     return self._result(state, state.final_answer or "", None)
                 state.mark_pending_approval(approval.approval_id)
+                self._publish_event(
+                    task.request_id,
+                    "approval_required",
+                    {"tool": "fetch_external_data", "approval_id": approval.approval_id},
+                )
                 return self._result(
                     state,
                     "请求已暂停：等待敏感工具调用审批。",
@@ -476,6 +635,11 @@ class AgentRunner:
                 count_budget=False,
             )
             state.mark_pending_approval(approval.approval_id)
+            self._publish_event(
+                task.request_id,
+                "approval_required",
+                {"tool": "fetch_external_data", "approval_id": approval.approval_id},
+            )
             self._record_diagnostic(
                 state,
                 "approval",
@@ -529,7 +693,7 @@ class AgentRunner:
                 status=state.status,
                 tenant_id=state.tenant_id,
             )
-        return AgentRunResult(
+        result = AgentRunResult(
             state=state,
             answer=answer,
             request_id=state.request_id,
@@ -537,6 +701,33 @@ class AgentRunner:
             artifacts=list(state.artifacts),
             verifier=verifier,
         )
+        event_type = (
+            "run_completed"
+            if state.status in {"completed", "pending_approval"}
+            else "run_failed"
+        )
+        self._publish_event(
+            state.request_id,
+            event_type,
+            {
+                "status": state.status,
+                "answer": answer,
+                "approval_id": result.approval_id,
+                "artifacts": [artifact.__dict__ for artifact in result.artifacts],
+                "verifier": verifier.__dict__ if verifier else None,
+            },
+        )
+        return result
+
+    @staticmethod
+    def _publish_event(request_id: str, event_type: str, payload: Dict[str, Any]) -> None:
+        if not event_bus.exists(request_id):
+            return
+        try:
+            event_bus.publish(request_id, event_type, payload)
+        except (EventBackpressureError, RuntimeError):
+            # Client disconnects and closed channels must not turn a finished run into 500.
+            return
 
     def _resolve_scene(self, task: AgentTask) -> str:
         if task.scene != "default":

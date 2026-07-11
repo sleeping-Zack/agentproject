@@ -18,6 +18,7 @@ from agent.tools.agent_tools import (
     tool_registry,
 )
 from mcp_adapter.server import MCPToolServer
+from observability.event_bus import AgentEvent, EventStreamConflictError, event_bus
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
 from rag.judge import LLMJudge, evaluate_batch
@@ -61,6 +62,7 @@ class ChatRequest(BaseModel):
     session_id: str = "default"
     stream: bool = False
     tenant_id: Optional[str] = None
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
 
 class ChatResponse(BaseModel):
@@ -237,6 +239,71 @@ async def chat(
     )
 
 
+_TERMINAL_STREAM_EVENTS = frozenset({"run_completed", "run_failed"})
+
+
+def _parse_last_event_id(value: Optional[str]) -> int:
+    if value is None or not value.strip():
+        return 0
+    try:
+        sequence = int(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Last-Event-ID must be an integer") from exc
+    if sequence < 0:
+        raise HTTPException(status_code=400, detail="Last-Event-ID must be non-negative")
+    return sequence
+
+
+def _format_sse_event(event: AgentEvent) -> str:
+    payload = dict(event.payload)
+    payload["request_id"] = event.request_id
+    payload["timestamp"] = event.timestamp
+    if event.event_type in _TERMINAL_STREAM_EVENTS:
+        payload.setdefault("trace_url", f"/traces/{event.request_id}")
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"id: {event.sequence}\nevent: {event.event_type}\ndata: {encoded}\n\n"
+
+
+def _save_stream_trace(request_id: str, session_id: str, tenant_id: str) -> None:
+    try:
+        trace_payload = trace_recorder.export_trace(request_id)
+    except KeyError:
+        return
+    store.save_trace(request_id, session_id, trace_payload, tenant_id=tenant_id)
+
+
+async def _legacy_runner_stream(task: AgentTask, last_event_id: int):
+    """Compatibility for injected runners that predate the streaming contract."""
+    result = await asyncio.to_thread(harness_runner.run, task)
+    sequence = last_event_id
+    if result.answer:
+        sequence += 1
+        yield AgentEvent(
+            request_id=result.request_id,
+            event_type="token_delta",
+            sequence=sequence,
+            timestamp=time.time(),
+            payload={"delta": result.answer, "provisional": False},
+        )
+    sequence += 1
+    terminal_type = (
+        "run_completed"
+        if result.state.status in {"completed", "pending_approval"}
+        else "run_failed"
+    )
+    yield AgentEvent(
+        request_id=result.request_id,
+        event_type=terminal_type,
+        sequence=sequence,
+        timestamp=time.time(),
+        payload={
+            "status": result.state.status,
+            "answer": result.answer,
+            "approval_id": result.approval_id,
+        },
+    )
+
+
 @app.post("/chat/stream")
 async def chat_stream(
     request: ChatRequest,
@@ -245,8 +312,9 @@ async def chat_stream(
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
     x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
     x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+    last_event_id: Optional[str] = Header(default=None, alias="Last-Event-ID"),
 ):
-    """Server-Sent Events facade over the harness-controlled execution path."""
+    """Stream sequenced harness events and replay missed events on reconnect."""
     auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id, request.tenant_id)
     tenant_id = auth.tenant_id
     _rate_limit(raw_request, tenant_id)
@@ -255,45 +323,64 @@ async def chat_stream(
     except UnsafeInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    def event_stream():
-        start_time = time.perf_counter()
-        task = AgentTask(
-            query=request.message,
-            session_id=request.session_id,
-            tenant_id=tenant_id,
-            user_role=auth.user_role,
-            scene="default",
-        )
-        result = harness_runner.run(task)
-        metrics_registry.observe_ttft((time.perf_counter() - start_time) * 1000)
-        final = result.answer
-        answer_payload = json.dumps(
-            {
-                "request_id": result.request_id,
-                "delta": final,
-                "full": final,
-                "status": result.state.status,
-                "approval_id": result.approval_id,
-            },
-            ensure_ascii=False,
-        )
-        yield f"event: answer\ndata: {answer_payload}\n\n"
-        trace_payload = trace_recorder.export_trace(result.request_id)
-        store.save_trace(result.request_id, request.session_id, trace_payload,
-                         tenant_id=tenant_id)
-        done_payload = json.dumps(
-            {
-                "request_id": result.request_id,
-                "answer": final,
-                "status": result.state.status,
-                "approval_id": result.approval_id,
-                "trace_url": f"/traces/{result.request_id}",
-            },
-            ensure_ascii=False,
-        )
-        yield f"event: done\ndata: {done_payload}\n\n"
+    sequence_cursor = _parse_last_event_id(last_event_id)
+    request_id = request.request_id or str(uuid4())
+    task = AgentTask(
+        query=request.message,
+        session_id=request.session_id,
+        tenant_id=tenant_id,
+        user_role=auth.user_role,
+        scene="default",
+        request_id=request_id,
+        emit_events=True,
+    )
+    expected_identity = AgentRunner.stream_identity(task)
+    existing_identity = event_bus.identity(request_id)
+    if existing_identity is not None and existing_identity != expected_identity:
+        raise HTTPException(status_code=409, detail="request_id is bound to another stream")
 
-    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    async def event_stream():
+        started_at = time.perf_counter()
+        ttft_recorded = False
+        disconnected = False
+        stream_method = getattr(harness_runner, "run_stream", None)
+        source = (
+            stream_method(task, last_event_id=sequence_cursor)
+            if callable(stream_method)
+            else _legacy_runner_stream(task, sequence_cursor)
+        )
+        try:
+            async for event in source:
+                if await raw_request.is_disconnected():
+                    disconnected = True
+                    break
+                if event.event_type == "token_delta" and not ttft_recorded:
+                    metrics_registry.observe_ttft((time.perf_counter() - started_at) * 1000)
+                    ttft_recorded = True
+                if event.event_type in _TERMINAL_STREAM_EVENTS:
+                    _save_stream_trace(request_id, request.session_id, tenant_id)
+                yield _format_sse_event(event)
+        except EventStreamConflictError:
+            conflict = AgentEvent(
+                request_id=request_id,
+                event_type="run_failed",
+                sequence=sequence_cursor + 1,
+                timestamp=time.time(),
+                payload={"status": "failed", "error": "stream_identity_conflict"},
+            )
+            yield _format_sse_event(conflict)
+        except asyncio.CancelledError:
+            event_bus.cancel(request_id)
+            raise
+        finally:
+            if disconnected:
+                event_bus.cancel(request_id)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "X-Request-ID": request_id,
+    }
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 

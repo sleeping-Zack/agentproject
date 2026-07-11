@@ -9,7 +9,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -267,6 +269,20 @@ def compare_baseline(
     return {"passed": not failures, "deltas": deltas, "failures": failures}
 
 
+def _current_commit() -> Optional[str]:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout.strip() or None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--golden", default="evals/retrieval_golden.jsonl")
@@ -325,12 +341,17 @@ def main() -> None:
             raise SystemExit(2)
 
     baseline_result = None
+    baseline_commit = None
     if args.baseline:
         baseline_payload = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        baseline_commit = baseline_payload.get("baseline_commit")
         baseline_result = compare_baseline(report, baseline_payload)
 
     output = {
         "schema_version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "baseline_commit": baseline_commit,
+        "current_commit": _current_commit(),
         "mode": evaluation_mode,
         "k": args.k,
         "strategies": report,

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
+from agent.budget import BudgetManager
+
 
 RunStatus = Literal[
     "running",
@@ -14,42 +16,90 @@ RunStatus = Literal[
 ]
 
 
-@dataclass
 class Budget:
-    max_steps: int = 8
-    max_tool_calls: int = 5
-    max_tokens: int = 8000
-    max_cost: float = 1.0
-    used_steps: int = 0
-    used_tool_calls: int = 0
-    used_tokens: int = 0
-    used_cost: float = 0.0
+    """Backward-compatible facade over the run's shared ``BudgetManager``."""
+
+    def __init__(
+        self,
+        max_steps: int = 8,
+        max_tool_calls: int = 5,
+        max_tokens: int = 8000,
+        max_cost: float = 1.0,
+        used_steps: int = 0,
+        used_tool_calls: int = 0,
+        used_tokens: int = 0,
+        used_cost: float = 0.0,
+        *,
+        manager: Optional[BudgetManager] = None,
+        deadline: Optional[float] = None,
+        deadline_seconds: Optional[float] = None,
+    ) -> None:
+        self._manager = manager or BudgetManager(
+            max_steps=max_steps,
+            max_tool_calls=max_tool_calls,
+            max_tokens=max_tokens,
+            max_cost=max_cost,
+            used_steps=used_steps,
+            used_tool_calls=used_tool_calls,
+            used_tokens=used_tokens,
+            used_cost=used_cost,
+            deadline=deadline,
+            deadline_seconds=deadline_seconds,
+        )
+
+    @property
+    def manager(self) -> BudgetManager:
+        return self._manager
+
+    @property
+    def max_steps(self) -> int:
+        return self._manager.max_steps
+
+    @property
+    def max_tool_calls(self) -> int:
+        return self._manager.max_tool_calls
+
+    @property
+    def max_tokens(self) -> int:
+        return self._manager.max_tokens
+
+    @property
+    def max_cost(self) -> float:
+        return self._manager.max_cost
+
+    @property
+    def used_steps(self) -> int:
+        return self._manager.used_steps
+
+    @property
+    def used_tool_calls(self) -> int:
+        return self._manager.used_tool_calls
+
+    @property
+    def used_tokens(self) -> int:
+        return self._manager.used_tokens
+
+    @property
+    def used_cost(self) -> float:
+        return self._manager.used_cost
 
     def record_step(self, count: int = 1) -> None:
-        self.used_steps += count
+        self._manager.record_step(count)
 
     def record_tool_call(self, count: int = 1) -> None:
-        self.used_tool_calls += count
+        self._manager.record_tool_call(count)
 
     def record_tokens(self, count: int) -> None:
-        self.used_tokens += count
+        self._manager.record_tokens(count)
 
     def record_cost(self, amount: float) -> None:
-        self.used_cost = round(self.used_cost + amount, 6)
+        self._manager.record_cost(amount)
 
     def can_continue(self) -> bool:
         return self.stop_reason() is None
 
     def stop_reason(self) -> Optional[str]:
-        if self.used_steps >= self.max_steps:
-            return "max_steps_exceeded"
-        if self.used_tool_calls >= self.max_tool_calls:
-            return "max_tool_calls_exceeded"
-        if self.used_tokens >= self.max_tokens:
-            return "max_tokens_exceeded"
-        if self.used_cost >= self.max_cost:
-            return "max_cost_exceeded"
-        return None
+        return self._manager.stop_reason()
 
 
 @dataclass
@@ -135,9 +185,10 @@ class AgentState:
     def add_observation(self, observation: Observation) -> None:
         self.observations.append(observation)
 
-    def add_tool_call(self, tool_call: ToolCallRecord) -> None:
+    def add_tool_call(self, tool_call: ToolCallRecord, *, count_budget: bool = True) -> None:
         self.tool_calls.append(tool_call)
-        self.budget.record_tool_call()
+        if count_budget:
+            self.budget.record_tool_call()
 
     def add_artifact(self, artifact: ArtifactRef) -> None:
         self.artifacts.append(artifact)

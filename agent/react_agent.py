@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from langchain.agents import create_agent
 
+from agent.budget import BudgetManager
 from agent.memory import ConversationMemory
 from agent.planner import (
     PlanRunResult,
@@ -20,7 +21,12 @@ from agent.summarizer import ConversationSummarizer
 from agent.tools.agent_tools import (fetch_external_data, fill_context_for_report,
                                      get_current_month, get_user_id, get_user_location,
                                      get_weather, rag, rag_summarize, tool_data_service)
-from agent.tools.middleware import log_before_model, monitor_tool, report_prompt_switch
+from agent.tools.middleware import (
+    enforce_model_budget,
+    log_before_model,
+    monitor_tool,
+    report_prompt_switch,
+)
 from agent.workflows.report_workflow import ReportWorkflow
 from model.factory import chat_model
 from observability.context import bind_request_context
@@ -40,6 +46,8 @@ def _default_session_store() -> Optional[SQLiteStore]:
 
 
 class ReactAgent:
+    manages_budget = True
+
     def __init__(
         self,
         session_store=None,
@@ -58,7 +66,12 @@ class ReactAgent:
             system_prompt=load_system_prompts(),
             tools=[rag_summarize, get_weather, get_user_location, get_user_id,
                    get_current_month, fetch_external_data, fill_context_for_report],
-            middleware=[monitor_tool, log_before_model, report_prompt_switch],
+            middleware=[
+                monitor_tool,
+                enforce_model_budget,
+                log_before_model,
+                report_prompt_switch,
+            ],
         )
         self.planner_agent = self._build_planner_agent()
 
@@ -86,7 +99,13 @@ class ReactAgent:
         def handle_generic(task: SubTask) -> SubTaskResult:
             query = task.args.get("query", "")
             try:
-                chunks = list(self.execute_stream(query, session_id=f"planner-{task.id}"))
+                chunks = list(
+                    self.execute_stream(
+                        query,
+                        session_id=f"planner-{task.id}",
+                        budget_manager=task.budget_manager,
+                    )
+                )
                 content = next((c for c in reversed(chunks) if c), "")
                 return SubTaskResult(id=task.id, kind=task.kind, success=bool(content),
                                      content=content)
@@ -106,8 +125,13 @@ class ReactAgent:
             max_replans=1,
         )
 
-    def run_plan(self, query: str, request_id: Optional[str] = None,
-                 tenant_id: str = "default") -> PlanRunResult:
+    def run_plan(
+        self,
+        query: str,
+        request_id: Optional[str] = None,
+        tenant_id: str = "default",
+        budget_manager: Optional[BudgetManager] = None,
+    ) -> PlanRunResult:
         request_id = request_id or str(uuid4())
         trace_recorder.start_trace(request_id=request_id, session_id="planner")
         with bind_request_context(request_id=request_id, tenant_id=tenant_id,
@@ -116,7 +140,11 @@ class ReactAgent:
                 assert_safe_user_input(query)
             except UnsafeInputError as exc:
                 return PlanRunResult(plan=[], results=[], answer=f"请求未执行：{exc}")
-            return self.planner_agent.run(query, request_id=request_id)
+            return self.planner_agent.run(
+                query,
+                request_id=request_id,
+                budget_manager=budget_manager,
+            )
 
     def execute_stream(self, query: str, session_id: str = "default",
                        request_id: Optional[str] = None,
@@ -124,8 +152,13 @@ class ReactAgent:
                        user_role: str = "user",
                        scene: str = "default",
                        approval_id: Optional[str] = None,
-                       max_tool_calls: Optional[int] = None):
+                       max_tool_calls: Optional[int] = None,
+                       budget_manager: Optional[BudgetManager] = None,
+                       max_model_output_tokens: Optional[int] = None,
+                       estimated_cost_per_1k_tokens: Optional[float] = None):
         request_id = request_id or str(uuid4())
+        if budget_manager is None and max_tool_calls is not None:
+            budget_manager = BudgetManager(max_tool_calls=max_tool_calls)
         trace_recorder.start_trace(request_id=request_id, session_id=session_id)
         request_start = metrics_registry.now()
         with bind_request_context(request_id=request_id, session_id=session_id,
@@ -148,14 +181,23 @@ class ReactAgent:
                         name="execute_stream",
                         metadata={"query": query, "history_count": len(history)},
                 ):
+                    runtime_context = {
+                        "report": False,
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "tenant_id": tenant_id,
+                        "user_role": user_role,
+                        "scene": scene,
+                        "approval_id": approval_id,
+                        "max_tool_calls": max_tool_calls,
+                        "budget_manager": budget_manager,
+                        "max_model_output_tokens": max_model_output_tokens,
+                        "estimated_cost_per_1k_tokens": estimated_cost_per_1k_tokens,
+                    }
                     for chunk in self.agent.stream(
                             input_dict,
                             stream_mode="values",
-                            context={"report": False, "request_id": request_id,
-                                     "session_id": session_id, "tenant_id": tenant_id,
-                                     "user_role": user_role, "scene": scene,
-                                     "approval_id": approval_id,
-                                     "max_tool_calls": max_tool_calls},
+                            context=runtime_context,
                     ):
                         latest_message = chunk["messages"][-1]
                         self._record_model_usage(request_id, latest_message)

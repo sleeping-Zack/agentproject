@@ -27,6 +27,8 @@ storage/chroma/
 storage/md5.text
 storage/*.db
 md5.text
+/tmp_answer.txt
+/tmp_response.json
 
 # Build artifacts
 dist/

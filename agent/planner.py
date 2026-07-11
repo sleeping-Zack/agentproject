@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from agent.budget import BudgetExceeded, BudgetManager, Reservation
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
 
@@ -35,6 +36,11 @@ class SubTask:
     description: str
     args: Dict = field(default_factory=dict)
     depends_on: List[str] = field(default_factory=list)
+    budget_manager: Optional[BudgetManager] = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
 
 @dataclass
@@ -123,20 +129,43 @@ class PlanExecutor:
     Tasks whose `depends_on` is empty are eligible to run in parallel.
     """
 
-    def __init__(self, max_workers: int = 4) -> None:
+    def __init__(
+        self,
+        max_workers: int = 4,
+        budget_manager: Optional[BudgetManager] = None,
+    ) -> None:
         self.max_workers = max_workers
+        self.budget_manager = budget_manager
         self._handlers: Dict[str, Callable[[SubTask], SubTaskResult]] = {}
 
     def register_handler(self, kind: str, handler: Callable[[SubTask], SubTaskResult]) -> None:
         self._handlers[kind] = handler
 
-    def _run_single(self, task: SubTask) -> SubTaskResult:
+    def _run_single(
+        self,
+        task: SubTask,
+        budget_manager: Optional[BudgetManager] = None,
+    ) -> SubTaskResult:
         handler = self._handlers.get(task.kind)
         if handler is None:
             return SubTaskResult(
                 id=task.id, kind=task.kind, success=False,
                 content="", error=f"no handler for kind={task.kind}",
             )
+        manager = budget_manager or self.budget_manager
+        reservation: Reservation | None = None
+        if manager is not None:
+            try:
+                reservation = manager.reserve_tool_call(task.kind)
+            except BudgetExceeded as exc:
+                return SubTaskResult(
+                    id=task.id,
+                    kind=task.kind,
+                    success=False,
+                    content="",
+                    error=exc.reason,
+                )
+            task.budget_manager = manager
         start = metrics_registry.now()
         try:
             result = handler(task)
@@ -159,28 +188,42 @@ class PlanExecutor:
                 id=task.id, kind=task.kind, success=False,
                 content="", error=str(exc),
             )
+        finally:
+            if reservation is not None:
+                manager.commit_tool_call(reservation)
 
-    def execute(self, plan: List[SubTask]) -> List[SubTaskResult]:
+    def execute(
+        self,
+        plan: List[SubTask],
+        budget_manager: Optional[BudgetManager] = None,
+    ) -> List[SubTaskResult]:
         results: Dict[str, SubTaskResult] = {}
         pending = list(plan)
         if self.max_workers <= 1 or len(pending) <= 1:
             for task in pending:
-                results[task.id] = self._run_single(task)
+                results[task.id] = self._run_single(task, budget_manager)
             return [results[t.id] for t in plan]
 
         # Independent tasks can run in parallel; tasks with deps run after.
         ready = [t for t in pending if not t.depends_on]
         remaining = [t for t in pending if t.depends_on]
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-            futures = {pool.submit(self._run_single, t): t for t in ready}
+            futures = {
+                pool.submit(self._run_single, task, budget_manager): task
+                for task in ready
+            }
             for future in as_completed(futures):
                 task = futures[future]
                 results[task.id] = future.result()
         for task in remaining:
-            results[task.id] = self._run_single(task)
+            results[task.id] = self._run_single(task, budget_manager)
         return [results[t.id] for t in plan]
 
-    async def execute_async(self, plan: List[SubTask]) -> List[SubTaskResult]:
+    async def execute_async(
+        self,
+        plan: List[SubTask],
+        budget_manager: Optional[BudgetManager] = None,
+    ) -> List[SubTaskResult]:
         """asyncio 版本：独立子任务用 asyncio.gather 并发，比 ThreadPoolExecutor
         更省内存，且能与 FastAPI 的事件循环统一。"""
         import asyncio
@@ -189,12 +232,19 @@ class PlanExecutor:
         remaining = [t for t in plan if t.depends_on]
         if ready:
             ready_results = await asyncio.gather(
-                *(asyncio.to_thread(self._run_single, t) for t in ready)
+                *(
+                    asyncio.to_thread(self._run_single, task, budget_manager)
+                    for task in ready
+                )
             )
             for task, result in zip(ready, ready_results):
                 results[task.id] = result
         for task in remaining:
-            results[task.id] = await asyncio.to_thread(self._run_single, task)
+            results[task.id] = await asyncio.to_thread(
+                self._run_single,
+                task,
+                budget_manager,
+            )
         return [results[t.id] for t in plan]
 
 
@@ -234,6 +284,7 @@ class PlannerAgent:
         replanner: Optional[Any] = None,
         max_steps: int = 8,
         max_replans: int = 1,
+        budget_manager: Optional[BudgetManager] = None,
     ) -> None:
         self.planner = planner or TaskPlanner()
         self.executor = executor or PlanExecutor()
@@ -242,8 +293,15 @@ class PlannerAgent:
         self.replanner = replanner
         self.max_steps = max_steps
         self.max_replans = max_replans
+        self.budget_manager = budget_manager
 
-    def run(self, query: str, request_id: Optional[str] = None) -> PlanRunResult:
+    def run(
+        self,
+        query: str,
+        request_id: Optional[str] = None,
+        budget_manager: Optional[BudgetManager] = None,
+    ) -> PlanRunResult:
+        manager = budget_manager or self.budget_manager
         if request_id:
             with trace_recorder.span(request_id, category="planner", name="plan"):
                 plan = self.planner.plan(query)
@@ -254,8 +312,8 @@ class PlannerAgent:
                 request_id, category="planner", name="execute",
                 metadata={"task_count": len(plan)},
             ):
-                results = self.executor.execute(plan)
-                plan, results = self._replan_failed(query, plan, results)
+                results = self.executor.execute(plan, budget_manager=manager)
+                plan, results = self._replan_failed(query, plan, results, manager)
             with trace_recorder.span(request_id, category="planner", name="aggregate"):
                 answer = self.aggregator.aggregate(query, plan, results)
         else:
@@ -264,8 +322,8 @@ class PlannerAgent:
             if validation_error:
                 metrics_registry.inc_counter("agent_planner_runs_total")
                 return PlanRunResult(plan=plan, results=[], answer=validation_error)
-            results = self.executor.execute(plan)
-            plan, results = self._replan_failed(query, plan, results)
+            results = self.executor.execute(plan, budget_manager=manager)
+            plan, results = self._replan_failed(query, plan, results, manager)
             answer = self.aggregator.aggregate(query, plan, results)
 
         metrics_registry.inc_counter("agent_planner_runs_total")
@@ -284,6 +342,7 @@ class PlannerAgent:
         query: str,
         plan: List[SubTask],
         results: List[SubTaskResult],
+        budget_manager: Optional[BudgetManager] = None,
     ) -> tuple[List[SubTask], List[SubTaskResult]]:
         if self.replanner is None or self.max_replans <= 0:
             return plan, results
@@ -320,5 +379,8 @@ class PlannerAgent:
                     error="replan_blocked:" + ",".join(validation.errors),
                 )
                 return plan, [*results, blocked]
-        fallback_results = self.executor.execute(fallback_plan)
+        fallback_results = self.executor.execute(
+            fallback_plan,
+            budget_manager=budget_manager,
+        )
         return [*plan, *fallback_plan], [*results, *fallback_results]

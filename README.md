@@ -13,14 +13,14 @@
 - **RAG 知识库**：从 `data/` 中的 PDF / TXT 构建 Chroma 向量库，以真实 Dense 分数和中文 BM25 双路召回，经 RRF 融合及可选 Cross-Encoder 精排后生成 evidence 与引用。
 - **多工具 Agent**：支持知识库检索、天气、用户位置、用户 ID、当前月份、使用记录查询和报告上下文切换。
 - **Harness 控制层**：统一 `AgentRunner` / `AgentState`，支持预算停止、动态工具策略、真实审批、答案验证、artifact 存储和诊断 trace。
-- **动态工具治理**：`ToolRegistry` 管工具元数据，`ToolPolicy` 从版本化 YAML 加载 tenant / role / scene / tool / args 规则，输出可审计的 `allow / deny / need_approval / need_redaction` 决策。
+- **动态工具治理**：`ToolRegistry` 管工具元数据，`ToolPolicy` 从版本化 YAML 加载 tenant / role / scene / tool / args 规则，输出可审计决策；默认配置已包含 tenant A/B 的功能权限差异。
 - **真实 HITL 审批**：敏感工具如 `fetch_external_data` 会进入 `SQLiteApprovalStore`，普通用户需审批，operator / admin 可审批。
-- **答案质量闸门**：`AnswerVerifier` 依次执行结构校验、Claim-Evidence 对齐与危险结论检测，仅在高风险或低置信时选择性调用 `LLMJudge`。
+- **答案质量闸门**：`AnswerVerifier` 依次执行结构校验、Claim-Evidence 对齐与危险结论检测，仅在高风险或低置信时选择性调用带超时、显式错误和 fail-closed 语义的 `LLMJudge`；直接 RAG 和 AgentRunner 共用该闸门。
 - **产物留存**：`SQLiteArtifactStore` 按 request_id 保存 final answer、verification failure、evidence、tool results 等运行产物。
 - **服务化入口**：FastAPI 暴露 `/chat`、`/chat/stream`、`/harness/run`、审批、artifact、MCP、trace、metrics、judge 等接口。
 - **MCP 工具服务**：支持 JSON-RPC `initialize`、`tools/list`、`tools/call`；MCP 工具调用同样经过 ToolPolicy 和审批存储。
 - **可观测性**：包含 request/tool/model trace、diagnostic event、OpenTelemetry 风格 span、Prometheus 指标，以及带序号、心跳、背压和断线重放的实时 SSE 事件流。
-- **评测门禁**：PR 运行 30 条冻结真实检索排名和 62 条离线 Agent golden，校验固定阈值及相对基线退化；真实模型评测由独立工作流定期执行。
+- **评测门禁**：PR 运行 30 条冻结真实检索排名、12 条生成 grounding 正反例和 62 条离线 Agent golden，校验固定阈值及相对基线退化；真实 Rerank、生成与 Judge 评测由独立工作流定期执行。
 
 ---
 
@@ -489,6 +489,8 @@ flowchart TB
 
 RAG 问答由 `RagSummarizeService` 实现：Dense 与 BM25 分别产生带真实分数和排名的 `RetrievalCandidate`，RRF 在不混用分值尺度的前提下融合候选，可选 reranker 对融合头部精排；最终 evidence 经过注入检测后进入 RAG prompt，并生成稳定文档 ID 的引用。
 
+30 条真实语料实测中，Dense / Hybrid / BGE Rerank 的 Recall@5 分别为 `0.8056 / 0.9333 / 0.7389`，MRR 为 `0.8778 / 0.9333 / 0.8389`。当前 BGE 模型在 CPU 上平均增加约 `29.35s` 延迟且质量退化，因此配置保持默认关闭；该结论和三策略逐条冻结排名已进入 baseline，后续替换模型必须先通过回归门禁。
+
 ---
 
 ## 13. 报告生成与敏感数据审批链路
@@ -689,10 +691,13 @@ flowchart TB
     RetrievalFixture["Dense / Hybrid fixture"] --> RetrievalEval
     RetrievalBaseline["retrieval baseline"] --> RetrievalEval
 
+    GenerationGolden["12-case generation golden"] --> GenerationEval["事实/禁止事实/引用/拒答"]
+    GenerationBaseline["generation baseline"] --> GenerationEval
     AgentGolden["62-case offline Agent golden"] --> AgentEval["完整 AgentRunner 离线执行"]
     AgentBaseline["agent baseline"] --> AgentEval
 
     RetrievalEval --> Gate["固定阈值 + baseline delta"]
+    GenerationEval --> Gate
     AgentEval --> Gate
     Gate --> CI["PR blocking CI"]
     Online["真实模型 / 真实向量库"] --> Scheduled["定期与手动报告\n不阻断 PR"]
@@ -704,11 +709,12 @@ flowchart TB
 python -m pytest tests -q
 python -m ruff check .
 python scripts/evaluate_retrieval.py --fixture evals/fixtures/retrieval_rankings_v1.json --baseline evals/baselines/retrieval_baseline_v1.json --gate
+python scripts/evaluate_generation.py --baseline evals/baselines/generation_baseline_v1.json --gate
 python scripts/evaluate_agent.py --golden evals/agent_offline_golden.jsonl --mode harness --offline --baseline evals/baselines/agent_baseline_v1.json --gate --min-case-count 60
 python scripts/benchmark_api.py --url http://127.0.0.1:8000/chat --api-key dev-api-key
 ```
 
-PR 门禁同时检查检索 Recall / Precision / MRR / nDCG、Agent pass rate、工具与参数准确率、引用有效性、artifact、P95 延迟和相对基线退化；在线工作流再补充真实模型、真实 embedding 与可选 reranker 的质量报告。
+PR 门禁同时检查检索 Recall / Precision / MRR / nDCG，生成事实覆盖、禁止事实、引用、知识库外拒答，以及 Agent pass rate、工具与参数准确率、artifact、P95 延迟和相对基线退化；在线工作流再补充真实模型、真实 embedding、Cross-Encoder 和选择性 Judge 报告。
 
 ---
 
@@ -826,7 +832,7 @@ docker run --env-file .env -p 8000:8000 sweeper-agent
 
 第五，**工具体系生产化**。工具有 manifest、scope、risk_level、side_effect、requires_approval、timeout_seconds、allowlist、ToolPolicy、缓存、重试、超时、熔断和 trace。
 
-第六，**质量可以被量化且阻断退化**。PR 对 30 条检索案例和 62 条 Agent 案例执行确定性门禁，并同时比较固定阈值与版本化 baseline；线上模型评测独立运行并产出 artifact。
+第六，**质量可以被量化且阻断退化**。PR 对 30 条检索、12 条生成 grounding 和 62 条 Agent 案例执行确定性门禁，并同时比较固定阈值与版本化 baseline；线上模型、Cross-Encoder 与 Judge 评测独立运行并产出 artifact。
 
 ---
 

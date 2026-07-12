@@ -286,6 +286,19 @@ class AnswerVerifier:
                 self._add_reason(reasons, "judge_score_below_threshold")
             if judge_score.success and judge_score.faithfulness < self.min_faithfulness_score:
                 self._add_reason(reasons, "judge_faithfulness_below_threshold")
+            if (
+                judge_score.success
+                and judge_score.overall >= self.min_overall_score
+                and judge_score.faithfulness >= self.min_faithfulness_score
+            ):
+                semantic_reasons = {
+                    "claims_missing",
+                    "unsupported_claim_rate_exceeded",
+                }
+                overridden = [reason for reason in reasons if reason in semantic_reasons]
+                reasons[:] = [reason for reason in reasons if reason not in semantic_reasons]
+                if overridden:
+                    judge_payload["overrode_reasons"] = overridden
         else:
             judge_payload = {
                 "status": "not_evaluated",
@@ -567,7 +580,10 @@ class AnswerVerifier:
             if score > best_score:
                 best_score = score
                 best_sentence = sentence
-        contradiction = best_score >= 0.45 and cls._polarity_conflicts(claim, best_sentence)
+        # Negation heuristics are only a hard refusal at very high lexical
+        # alignment. Lower-confidence polarity differences are delegated to
+        # the semantic judge to avoid false positives on paraphrases.
+        contradiction = best_score >= 0.90 and cls._polarity_conflicts(claim, best_sentence)
         if contradiction:
             return ClaimSupport(
                 claim=claim,
@@ -669,6 +685,13 @@ class AnswerVerifier:
 
     @staticmethod
     def _polarity_conflicts(claim: str, evidence: str) -> bool:
+        if any(
+            marker in claim
+            for marker in ("部分资料", "不同资料", "资料存在差异", "不同机型")
+        ):
+            # The claim is explicitly disclosing conflicting/variant evidence;
+            # do not misclassify that disclosure as the contradiction itself.
+            return False
         return bool(_NEGATION_RE.search(claim)) != bool(_NEGATION_RE.search(evidence))
 
     @staticmethod

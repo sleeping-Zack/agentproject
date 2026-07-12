@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "73191bb",
+  "generated_at": "2026-07-12T06:30:00+00:00",
+  "golden": "evals/generation_golden.jsonl",
+  "mode": "offline_fixture",
+  "summary": {
+    "case_count": 12,
+    "pass_rate": 1.0,
+    "refusal_accuracy": 1.0,
+    "fact_coverage": 1.0,
+    "forbidden_hit_rate": 0.0,
+    "citation_validity": 1.0,
+    "citation_coverage": 1.0,
+    "unsupported_claim_rate": 0.0,
+    "harmful_instruction_rate": 0.0,
+    "judge_error_rate": 0.0
+  },
+  "allowed_regression": {
+    "pass_rate": 0.0,
+    "refusal_accuracy": 0.0,
+    "fact_coverage": 0.0,
+    "forbidden_hit_rate": 0.0,
+    "citation_validity": 0.0,
+    "citation_coverage": 0.0,
+    "unsupported_claim_rate": 0.0,
+    "harmful_instruction_rate": 0.0,
+    "judge_error_rate": 0.0
+  }
+}

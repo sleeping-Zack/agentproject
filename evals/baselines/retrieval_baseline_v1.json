@@ -1,11 +1,12 @@
 {
-  "schema_version": 2,
-  "baseline_commit": "6c84db741cd0d36673472f0d06477e662c8ee798",
-  "generated_at": "2026-07-11T05:58:07.796662+00:00",
+  "schema_version": 3,
+  "baseline_commit": "73191bb51976b44ea27a9ef9348141002b829d4e",
+  "generated_at": "2026-07-12T06:45:56.345420+00:00",
   "fixture": "evals/fixtures/retrieval_rankings_v1.json",
   "golden": "evals/retrieval_golden.jsonl",
   "case_count": 30,
   "k": 5,
+  "reranker_model": "BAAI/bge-reranker-v2-m3",
   "allowed_regression": {
     "recall_at_k": 0.0,
     "precision_at_k": 0.0,
@@ -26,6 +27,13 @@
       "precision_at_k": 0.3933,
       "mrr": 0.9333,
       "ndcg_at_k": 0.9035,
+      "hit_rate": 0.9333
+    },
+    "hybrid_rerank": {
+      "recall_at_k": 0.7389,
+      "precision_at_k": 0.3133,
+      "mrr": 0.8389,
+      "ndcg_at_k": 0.7322,
       "hit_rate": 0.9333
     }
   }

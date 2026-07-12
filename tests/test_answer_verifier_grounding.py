@@ -236,3 +236,41 @@ def test_judge_failure_is_explicit_and_fails_closed():
     assert result.passed is False
     assert result.judge["status"] == "error"
     assert "judge_unavailable" in result.reasons
+
+
+def test_high_faithfulness_judge_can_resolve_soft_lexical_grounding_miss():
+    judge = CountingJudge(JudgeScore(4.8, 4.8, 4.5, "semantic paraphrase is grounded"))
+    result = AnswerVerifier(judge=judge).verify(
+        query="设备为什么回不去充电座",
+        answer="移除基站附近物品并擦净金属接触区域。\n\n引用来源：manual-current",
+        evidence=[
+            {
+                "id": "manual-current",
+                "content": "清理充电座周围遮挡，并擦拭充电触点。",
+            }
+        ],
+        scene="rag",
+    )
+
+    assert result.passed is True
+    assert result.judge["status"] == "evaluated"
+    assert "unsupported_claim_rate_exceeded" in result.judge["overrode_reasons"]
+
+
+def test_explicit_source_conflict_disclosure_is_not_itself_a_contradiction():
+    result = AnswerVerifier().verify(
+        query="HEPA滤网能否水洗",
+        answer=(
+            "部分资料建议按机型说明清洁，不同机型存在差异。\n\n"
+            "引用来源：manual-current"
+        ),
+        evidence=[
+            {
+                "id": "manual-current",
+                "content": "部分机型滤网可水洗，HEPA滤网水洗会降低过滤效果。",
+            }
+        ],
+        scene="rag",
+    )
+
+    assert "evidence_contradiction" not in result.reasons

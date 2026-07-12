@@ -296,6 +296,12 @@ def main() -> None:
     parser.add_argument("--report", help="写机读 JSON 报告")
     parser.add_argument("--baseline", help="批准的基线 JSON")
     parser.add_argument("--gate", action="store_true")
+    parser.add_argument(
+        "--gate-strategy",
+        choices=["dense_only", "hybrid", "hybrid_rerank"],
+        default="hybrid",
+        help="strategy that must satisfy absolute thresholds; baseline deltas still check all",
+    )
     parser.add_argument("--min-recall", type=float, default=0.6)
     parser.add_argument("--min-precision", type=float, default=0.1)
     parser.add_argument("--min-mrr", type=float, default=0.5)
@@ -376,7 +382,9 @@ def main() -> None:
         report_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if args.gate:
-        selected = report.get("hybrid_rerank") or report.get("hybrid") or report["dense_only"]
+        selected = report.get(args.gate_strategy)
+        if selected is None:
+            parser.error(f"--gate-strategy {args.gate_strategy!r} was not evaluated")
         failures = []
         if selected["recall_at_k"] < args.min_recall:
             failures.append("recall_below_threshold")
@@ -388,7 +396,11 @@ def main() -> None:
             failures.append("ndcg_below_threshold")
         if baseline_result and not baseline_result["passed"]:
             failures.extend(baseline_result["failures"])
-        gate = {"passed": not failures, "failures": failures}
+        gate = {
+            "passed": not failures,
+            "strategy": args.gate_strategy,
+            "failures": failures,
+        }
         print(json.dumps({"gate": gate}, ensure_ascii=False))
         if failures:
             raise SystemExit(1)

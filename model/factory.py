@@ -70,8 +70,18 @@ class _LazyModel:
     def __getattr__(self, name):
         return getattr(object.__getattribute__(self, "_getter")(), name)
 
+    def resolve(self):
+        """Return the real model so LCEL can preserve BaseChatModel semantics."""
+        return object.__getattribute__(self, "_getter")()
+
     def __call__(self, *args, **kwargs):
-        return object.__getattribute__(self, "_getter")()(*args, **kwargs)
+        target = self.resolve()
+        invoke = getattr(target, "invoke", None)
+        if invoke is not None:
+            return invoke(*args, **kwargs)
+        if callable(target):
+            return target(*args, **kwargs)
+        raise TypeError(f"lazy model target is not invokable: {type(target).__name__}")
 
 
 chat_model = _LazyModel(_get_chat_model)

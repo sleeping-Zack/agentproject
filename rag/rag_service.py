@@ -92,7 +92,8 @@ class RagSummarizeService(object):
                 self._semantic_cache = None
 
     def _init_chain(self):
-        chain = self.prompt_template | self.model | StrOutputParser()
+        model = self.model.resolve() if hasattr(self.model, "resolve") else self.model
+        chain = self.prompt_template | model | StrOutputParser()
         return chain
 
     @property
@@ -212,6 +213,19 @@ class RagSummarizeService(object):
 
         candidates = self.retrieve(query)
 
+        dense_relevance = max(
+            (candidate.dense_score for candidate in candidates if candidate.dense_score is not None),
+            default=0.0,
+        )
+        sparse_relevance = max(
+            (candidate.sparse_score for candidate in candidates if candidate.sparse_score is not None),
+            default=0.0,
+        )
+        retrieval_supported = (
+            dense_relevance >= float(self._retrieval_cfg.get("min_dense_relevance", 0.15))
+            or sparse_relevance >= float(self._retrieval_cfg.get("min_sparse_relevance", 1.0))
+        )
+
         context = ""
         counter = 0
         evidence: List[EvidenceChunk] = []
@@ -239,7 +253,8 @@ class RagSummarizeService(object):
             context += f"【参考资料{counter}】: 参考资料：{doc.page_content} | 参考元数据：{doc.metadata}\n"
             safe_docs.append(doc)
 
-        if not evidence:
+        if not evidence or not retrieval_supported:
+            reason = "evidence_required" if not evidence else "retrieval_relevance_below_threshold"
             result = RagResult(
                 answer="请求未执行：知识库中没有足够证据支持回答该问题。",
                 evidence=[],
@@ -247,7 +262,9 @@ class RagSummarizeService(object):
                 verification={
                     "passed": False,
                     "action": "refuse",
-                    "reasons": ["evidence_required"],
+                    "reasons": [reason],
+                    "dense_relevance": dense_relevance,
+                    "sparse_relevance": sparse_relevance,
                 },
             )
             if self._semantic_cache is not None:
@@ -278,7 +295,7 @@ class RagSummarizeService(object):
                 "reasons": list(verified.reasons),
                 **verified.quality,
             }
-            if not verified.passed:
+            if not verified.passed and verified.action == "refuse":
                 answer_with_citations = (
                     "请求未执行：生成结果未通过证据一致性校验，"
                     "知识库中没有足够证据支持该结论。"

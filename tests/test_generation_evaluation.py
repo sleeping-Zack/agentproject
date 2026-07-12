@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from scripts.evaluate_generation import evaluate_case, load_golden, summarize
 
@@ -35,3 +36,27 @@ def test_rejected_harmful_candidate_counts_as_caught_not_escaped():
     assert row["refused"] is True
     assert row["measured_forbidden_hit_rate"] == 1.0
     assert row["forbidden_hit_rate"] == 0.0
+
+
+def test_online_semantic_out_of_domain_refusal_is_recognized():
+    class Service:
+        def rag_summarize_result(self, _query, tenant_id):
+            assert tenant_id == "generation-eval"
+            return SimpleNamespace(
+                answer="参考资料未涉及股票预测，无法回答该问题。",
+                evidence=[],
+            )
+
+    row = evaluate_case(
+        {
+            "id": "ood",
+            "query": "股票明天会涨吗",
+            "expected_refusal": True,
+            "mock_answer": "unused",
+            "mock_evidence": [],
+        },
+        service=Service(),
+    )
+
+    assert row["passed"] is True
+    assert row["refused"] is True

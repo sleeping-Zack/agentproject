@@ -154,6 +154,36 @@ def test_rag_refuses_before_model_call_when_no_safe_evidence():
     assert result.verification["reasons"] == ["evidence_required"]
 
 
+def test_rag_refuses_low_relevance_out_of_domain_retrieval_before_model_call():
+    service = RagSummarizeService.__new__(RagSummarizeService)
+    service._semantic_cache = None
+    service._retrieval_cfg = {
+        "min_dense_relevance": 0.15,
+        "min_sparse_relevance": 1.0,
+    }
+    candidate = RetrievalCandidate(
+        doc_id="irrelevant#1",
+        document=Document(
+            page_content="扫地机器人未来可能支持自动倒垃圾。",
+            metadata={"source": "manual.txt", "chunk_id": "1"},
+        ),
+        dense_score=0.04,
+        fusion_score=0.02,
+    )
+    service._hybrid = FakeHybrid([candidate])
+
+    class ExplodingChain:
+        def invoke(self, _payload):
+            raise AssertionError("model must not run for out-of-domain retrieval")
+
+    service._chain = ExplodingChain()
+
+    result = service.rag_summarize_result("量子计算股票明天会涨吗")
+
+    assert result.answer.startswith("请求未执行")
+    assert result.verification["reasons"] == ["retrieval_relevance_below_threshold"]
+
+
 def test_rag_refuses_generated_claim_that_is_not_grounded_in_evidence():
     service = RagSummarizeService.__new__(RagSummarizeService)
     service._semantic_cache = None

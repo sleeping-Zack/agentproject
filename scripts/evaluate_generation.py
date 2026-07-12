@@ -41,6 +41,21 @@ def _online_payload(service, case: Dict[str, Any]) -> tuple[str, List[Dict[str, 
     return result.answer, [item.__dict__ for item in result.evidence]
 
 
+def _is_explicit_refusal(answer: str) -> bool:
+    normalized = answer.strip()
+    return normalized.startswith("请求未执行") or any(
+        marker in normalized
+        for marker in (
+            "无法回答该问题",
+            "无法基于所提供资料",
+            "知识库不包含",
+            "参考资料未涉及",
+            "资料中未包含",
+            "未包含任何",
+        )
+    )
+
+
 def evaluate_case(
     case: Dict[str, Any],
     *,
@@ -56,10 +71,25 @@ def evaluate_case(
         evidence=evidence,
         scene="rag",
     )
-    refused = answer.startswith("请求未执行") or not verification.passed
-    expected_refusal = bool(case["expected_refusal"])
-    expected_facts = list(case.get("expected_facts") or [])
-    forbidden_facts = list(case.get("forbidden_facts") or [])
+    online = service is not None
+    refused = _is_explicit_refusal(answer) or (
+        not online and not verification.passed
+    )
+    expected_refusal = bool(
+        case.get("online_expected_refusal", case["expected_refusal"])
+        if online
+        else case["expected_refusal"]
+    )
+    expected_facts = list(
+        case.get("online_expected_facts", case.get("expected_facts", []))
+        if online
+        else case.get("expected_facts", [])
+    )
+    forbidden_facts = list(
+        case.get("online_forbidden_facts", case.get("forbidden_facts", []))
+        if online
+        else case.get("forbidden_facts", [])
+    )
     fact_coverage = keyword_coverage(answer, expected_facts)
     measured_forbidden_rate = forbidden_hit_rate(answer, forbidden_facts)
     outcome_correct = refused == expected_refusal

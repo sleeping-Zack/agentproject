@@ -41,9 +41,14 @@ jobs:
           python scripts/evaluate_retrieval.py
           --enable-reranker
           --report reports/retrieval-online.json
-      - name: Evaluate live RAG generation
+      - name: Evaluate live RAG generation with selective judge
         continue-on-error: true
-        run: python scripts/evaluate_rag.py --report reports/rag-generation-online.json
+        run: >-
+          python scripts/evaluate_generation.py
+          --online
+          --judge
+          --golden evals/generation_golden.jsonl
+          --report reports/rag-generation-online.json
       - name: Evaluate live agent
         continue-on-error: true
         run: >-

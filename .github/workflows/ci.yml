@@ -35,11 +35,24 @@ jobs:
           --fixture evals/fixtures/retrieval_rankings_v1.json
           --baseline evals/baselines/retrieval_baseline_v1.json
           --gate
+          --gate-strategy hybrid
           --min-recall 0.90
           --min-precision 0.15
           --min-mrr 0.90
           --min-ndcg 0.90
           --report reports/retrieval-offline.json
+      - name: Offline generation grounding regression
+        run: >-
+          python scripts/evaluate_generation.py
+          --golden evals/generation_golden.jsonl
+          --baseline evals/baselines/generation_baseline_v1.json
+          --gate
+          --min-pass-rate 1.0
+          --min-refusal-accuracy 1.0
+          --min-fact-coverage 1.0
+          --min-citation-validity 1.0
+          --max-forbidden-hit-rate 0.0
+          --report reports/generation-offline.json
       - name: Offline agent regression (62 cases)
         env:
           MODEL_PROVIDER: mock

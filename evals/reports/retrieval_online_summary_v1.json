@@ -1,12 +1,14 @@
 {
-  "schema_version": 1,
-  "generated_at": "2026-07-11T05:58:07.796662+00:00",
-  "source_commit": "6c84db741cd0d36673472f0d06477e662c8ee798",
+  "schema_version": 2,
+  "generated_at": "2026-07-12T06:45:56.345420+00:00",
+  "source_commit": "73191bb51976b44ea27a9ef9348141002b829d4e",
   "mode": "online_retrievers",
   "split": "test",
   "k": 5,
   "case_count": 30,
-  "reranker_evaluated": false,
+  "reranker_evaluated": true,
+  "reranker_model": "BAAI/bge-reranker-v2-m3",
+  "reranker_active": true,
   "strategies": {
     "dense_only": {
       "recall_at_k": 0.8056,
@@ -14,8 +16,8 @@
       "mrr_at_10": 0.8778,
       "ndcg_at_k": 0.7683,
       "hit_rate": 0.9333,
-      "latency_ms_avg": 253.918,
-      "latency_ms_p95": 338.888
+      "latency_ms_avg": 334.656,
+      "latency_ms_p95": 315.408
     },
     "hybrid": {
       "recall_at_k": 0.9333,
@@ -23,12 +25,25 @@
       "mrr_at_10": 0.9333,
       "ndcg_at_k": 0.9035,
       "hit_rate": 0.9333,
-      "latency_ms_avg": 266.578,
-      "latency_ms_p95": 385.224
+      "latency_ms_avg": 343.725,
+      "latency_ms_p95": 312.731
+    },
+    "hybrid_rerank": {
+      "recall_at_k": 0.7389,
+      "precision_at_k": 0.3133,
+      "mrr_at_10": 0.8389,
+      "ndcg_at_k": 0.7322,
+      "hit_rate": 0.9333,
+      "latency_ms_avg": 29352.216,
+      "latency_ms_p95": 20939.213
     }
   },
+  "promotion_decision": {
+    "enabled_by_default": false,
+    "reason": "BGE rerank regressed Recall@5, MRR and nDCG and added excessive CPU latency; keep it opt-in until a better model or serving runtime passes this baseline."
+  },
   "notes": [
-    "Full per-case output is retained in Git history and CI artifacts, not on main.",
-    "Cross-encoder rerank was not active in this online run and is therefore not reported as measured."
+    "All three strategies were measured against the same 30 queries and live corpus.",
+    "Full per-case output remains in the local ignored report and CI artifacts."
   ]
 }

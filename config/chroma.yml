@@ -23,3 +23,5 @@ retrieval:
   enable_reranker: false   # 默认关闭；本地/线上按需 true
   reranker_model: BAAI/bge-reranker-v2-m3
   bm25_index_path: storage/bm25_index.pkl
+  min_dense_relevance: 0.15  # 低于阈值且无 BM25 支持时视为知识库外问题
+  min_sparse_relevance: 1.0

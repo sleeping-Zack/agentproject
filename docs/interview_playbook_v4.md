@@ -210,7 +210,7 @@ baseline = _compare_baseline(report["aggregate"], report["latency"], baseline_pa
 
 ### 可能被追问
 - **Q：关键词命中率会不会太弱，模型换种说法就过不了？**
-  A：是的，所以这只是第一层粗筛。下一步接 `rag/judge.py`（LLM-as-judge）做语义层评分，但要烧 token，所以放线下/批量跑。这套 keyword 评测在 CI 里能跑、几秒出结果，是不同 trade-off。
+  A：是的，所以关键词只作为确定性 CI 的第一层。现在 `rag/judge.py` 已接入选择性 LLM-as-Judge，对高风险或低置信结果做 correctness、faithfulness、completeness 语义评分；真实模型评测放在线上定期/手动工作流，避免让 PR 门禁受成本和模型波动影响。
 - **Q：工具命中率怎么算"调对了"？**
   A：工具名和参数分开计分；`parameter_accuracy` 会逐字段比对 golden 中的 `expected_tools[i].args`，避免“工具选对但参数错”仍被算通过。
 - **Q：多轮 case 怎么写？**

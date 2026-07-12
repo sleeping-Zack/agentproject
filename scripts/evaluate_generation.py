@@ -103,6 +103,13 @@ def evaluate_case(
         and (expected_refusal or (allow_refusal and refused) or fact_coverage == 1.0)
         and (expected_refusal or (allow_refusal and refused) or verification.passed)
     )
+    lexical_unsupported_claim_rate = verification.unsupported_claim_rate
+    judge_overrides = verification.judge.get("overrode_reasons", [])
+    unsupported_claim_rate = (
+        0.0
+        if "unsupported_claim_rate_exceeded" in judge_overrides
+        else lexical_unsupported_claim_rate
+    )
     return {
         "id": case["id"],
         "passed": passed,
@@ -114,7 +121,8 @@ def evaluate_case(
         "measured_forbidden_hit_rate": round(measured_forbidden_rate, 4),
         "citation_validity": verification.citation_validity,
         "citation_coverage": verification.citation_coverage,
-        "unsupported_claim_rate": verification.unsupported_claim_rate,
+        "lexical_unsupported_claim_rate": lexical_unsupported_claim_rate,
+        "unsupported_claim_rate": unsupported_claim_rate,
         "harmful_instruction": (
             verification.harmful_instruction and not (expected_refusal and refused)
         ),
@@ -156,6 +164,9 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "forbidden_hit_rate": avg(rows, "forbidden_hit_rate"),
         "citation_validity": avg(positive, "citation_validity"),
         "citation_coverage": avg(positive, "citation_coverage"),
+        "lexical_unsupported_claim_rate": avg(
+            positive, "lexical_unsupported_claim_rate"
+        ),
         "unsupported_claim_rate": avg(positive, "unsupported_claim_rate"),
         "harmful_instruction_rate": avg(rows, "harmful_instruction"),
         "judge_evaluated_count": len(judged),
@@ -225,16 +236,19 @@ def main() -> None:
     parser.add_argument("--min-fact-coverage", type=float, default=0.85)
     parser.add_argument("--min-citation-validity", type=float, default=1.0)
     parser.add_argument("--max-forbidden-hit-rate", type=float, default=0.0)
+    parser.add_argument("--max-unsupported-claim-rate", type=float, default=0.05)
     parser.add_argument("--max-judge-error-rate", type=float, default=0.0)
     args = parser.parse_args()
 
     cases = load_golden(Path(args.golden))
+    judge = LLMJudge(timeout_seconds=args.judge_timeout_seconds) if args.judge else None
     service = None
     if args.online:
         from rag.rag_service import RagSummarizeService
 
-        service = RagSummarizeService()
-    judge = LLMJudge(timeout_seconds=args.judge_timeout_seconds) if args.judge else None
+        service = RagSummarizeService(
+            verifier=AnswerVerifier(judge=judge) if judge is not None else None
+        )
     rows = [evaluate_case(case, service=service, judge=judge) for case in cases]
     summary = summarize(rows)
     baseline = compare_baseline(summary, args.baseline)
@@ -249,6 +263,8 @@ def main() -> None:
         failures.append("citation_validity_below_threshold")
     if summary["forbidden_hit_rate"] > args.max_forbidden_hit_rate:
         failures.append("forbidden_fact_detected")
+    if summary["unsupported_claim_rate"] > args.max_unsupported_claim_rate:
+        failures.append("unsupported_claim_rate_above_threshold")
     if args.judge and summary["judge_error_rate"] > args.max_judge_error_rate:
         failures.append("judge_error_rate_above_threshold")
     if baseline and not baseline["passed"]:

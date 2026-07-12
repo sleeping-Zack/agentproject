@@ -73,7 +73,7 @@ class TongyiProvider:
 
     def as_langchain_model(self):
         from langchain_community.chat_models.tongyi import ChatTongyi
-        return ChatTongyi(model=self.config.model_name)
+        return ChatTongyi(model=self.config.model_name, **(self.config.extra or {}))
 
 
 class OpenAICompatibleProvider:

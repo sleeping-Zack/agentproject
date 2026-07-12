@@ -211,3 +211,39 @@ def test_rag_refuses_generated_claim_that_is_not_grounded_in_evidence():
     assert result.answer.startswith("请求未执行")
     assert result.verification["passed"] is False
     assert "unsupported_claim_rate_exceeded" in result.verification["reasons"]
+
+
+def test_rag_retries_failed_generation_once_before_returning_answer():
+    service = RagSummarizeService.__new__(RagSummarizeService)
+    service._semantic_cache = None
+    service._retrieval_cfg = {}
+    service.verify_generation = True
+    service.verifier = None
+
+    class RecoveringChain:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, _payload):
+            self.calls += 1
+            if self.calls == 1:
+                return "可以直接用水冲洗电机。"
+            return "滤网应每周拆下并使用干布清理。"
+
+    service._chain = RecoveringChain()
+    candidate = RetrievalCandidate(
+        doc_id="manual.pdf#c1",
+        document=Document(
+            page_content="滤网应每周拆下并使用干布清理。",
+            metadata={"source": "manual.pdf", "chunk_id": "c1"},
+        ),
+        dense_score=0.8,
+        fusion_score=0.5,
+    )
+    service._hybrid = FakeHybrid([candidate])
+
+    result = service.rag_summarize_result("滤网如何维护")
+
+    assert service._chain.calls == 2
+    assert result.verification["passed"] is True
+    assert result.answer.startswith("滤网应每周")

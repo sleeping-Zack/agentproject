@@ -52,6 +52,7 @@ jobs:
           --min-fact-coverage 1.0
           --min-citation-validity 1.0
           --max-forbidden-hit-rate 0.0
+          --max-unsupported-claim-rate 0.05
           --report reports/generation-offline.json
       - name: Offline agent regression (62 cases)
         env:

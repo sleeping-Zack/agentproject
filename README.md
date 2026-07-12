@@ -716,6 +716,8 @@ python scripts/benchmark_api.py --url http://127.0.0.1:8000/chat --api-key dev-a
 
 PR 门禁同时检查检索 Recall / Precision / MRR / nDCG，生成事实覆盖、禁止事实、引用、知识库外拒答，以及 Agent pass rate、工具与参数准确率、artifact、P95 延迟和相对基线退化；在线工作流再补充真实模型、真实 embedding、Cross-Encoder 和选择性 Judge 报告。
 
+九项原始 P0 / P1 的实现映射、实测指标和最终验收命令见 [`docs/p0_p1_completion.md`](docs/p0_p1_completion.md)。
+
 ---
 
 ## 20. 典型请求链路

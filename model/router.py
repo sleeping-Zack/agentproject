@@ -123,6 +123,7 @@ def build_default_router_from_config(rag_conf: Dict) -> ModelRouter:
         config=ProviderConfig(
             provider=os.getenv("MODEL_PROVIDER", rag_conf.get("model_provider", "tongyi")),
             model_name=os.getenv("CHAT_MODEL_NAME", rag_conf["chat_model_name"]),
+            extra={"temperature": float(rag_conf.get("model_temperature", 0.0))},
         ),
         scene=DEFAULT_SCENE,
         weight=10,

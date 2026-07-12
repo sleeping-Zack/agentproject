@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
-from agent.verifier import AnswerVerifier
+from agent.verifier import AnswerVerifier, build_default_answer_verifier
 from model.factory import chat_model, embed_model
 from observability.context import request_context
 from observability.metrics import metrics_registry
@@ -77,7 +77,7 @@ class RagSummarizeService(object):
         self._prompt_version = request_context().prompt_version or "rag_summarize:unversioned"
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)
         self.model = chat_model
-        self.verifier = verifier or AnswerVerifier()
+        self.verifier = verifier or build_default_answer_verifier()
         self.verify_generation = verify_generation
         self._chain = None
         self._semantic_cache = None
@@ -271,16 +271,22 @@ class RagSummarizeService(object):
                 self._semantic_cache.set(query, deepcopy(result), namespace=cache_namespace)
             return result
 
-        answer = self.chain.invoke(
-            {
-                "input": query,
-                "context": context,
-            }
-        )
         citations = format_citations(safe_docs)
-        answer_with_citations = f"{answer}\n\n引用来源：\n{citations}" if citations else answer
         verification = None
-        if getattr(self, "verify_generation", False):
+        answer_with_citations = ""
+        max_attempts = 2 if getattr(self, "verify_generation", False) else 1
+        for _attempt in range(max_attempts):
+            answer = self.chain.invoke(
+                {
+                    "input": query,
+                    "context": context,
+                }
+            )
+            answer_with_citations = (
+                f"{answer}\n\n引用来源：\n{citations}" if citations else answer
+            )
+            if not getattr(self, "verify_generation", False):
+                break
             verifier = getattr(self, "verifier", None) or AnswerVerifier()
             verified = verifier.verify(
                 query=query,
@@ -295,11 +301,13 @@ class RagSummarizeService(object):
                 "reasons": list(verified.reasons),
                 **verified.quality,
             }
-            if not verified.passed and verified.action == "refuse":
-                answer_with_citations = (
-                    "请求未执行：生成结果未通过证据一致性校验，"
-                    "知识库中没有足够证据支持该结论。"
-                )
+            if verified.passed:
+                break
+        if verification is not None and not verification["passed"]:
+            answer_with_citations = (
+                "请求未执行：生成结果未通过证据一致性校验，"
+                "知识库中没有足够证据支持该结论。"
+            )
         result = RagResult(
             answer=answer_with_citations,
             evidence=evidence,

@@ -22,6 +22,8 @@ jobs:
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       MODEL_PROVIDER: tongyi
       AGENT_MODEL_PROVIDER: tongyi
+      AGENT_LLM_JUDGE_ENABLED: "true"
+      AGENT_LLM_JUDGE_TIMEOUT_SECONDS: "30"
     steps:
       - uses: actions/checkout@v4
         with:

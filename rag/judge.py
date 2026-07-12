@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from observability.metrics import metrics_registry
 
@@ -49,6 +50,8 @@ class JudgeScore:
     faithfulness: float
     completeness: float
     rationale: str = ""
+    success: bool = True
+    error_code: Optional[str] = None
 
     @property
     def overall(self) -> float:
@@ -56,13 +59,15 @@ class JudgeScore:
             (self.correctness + self.faithfulness + self.completeness) / 3, 4
         )
 
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "correctness": self.correctness,
             "faithfulness": self.faithfulness,
             "completeness": self.completeness,
             "overall": self.overall,
             "rationale": self.rationale,
+            "success": self.success,
+            "error_code": self.error_code,
         }
 
 
@@ -87,14 +92,28 @@ def _coerce_score(value, default: float = 3.0) -> float:
 def _parse_judge_response(raw: str) -> JudgeScore:
     text = (raw or "").strip()
     if not text:
-        return JudgeScore(3.0, 3.0, 3.0, rationale="empty judge response")
+        return JudgeScore(
+            3.0,
+            3.0,
+            3.0,
+            rationale="empty judge response",
+            success=False,
+            error_code="empty_response",
+        )
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:
         text = match.group(0)
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        return JudgeScore(3.0, 3.0, 3.0, rationale="failed to parse judge json")
+        return JudgeScore(
+            3.0,
+            3.0,
+            3.0,
+            rationale="failed to parse judge json",
+            success=False,
+            error_code="invalid_json",
+        )
     return JudgeScore(
         correctness=_coerce_score(payload.get("correctness")),
         faithfulness=_coerce_score(payload.get("faithfulness")),
@@ -106,8 +125,15 @@ def _parse_judge_response(raw: str) -> JudgeScore:
 class LLMJudge:
     """Wrap any text-in/text-out callable as a structured grader."""
 
-    def __init__(self, invoker: Optional[Callable[[str], str]] = None) -> None:
+    def __init__(
+        self,
+        invoker: Optional[Callable[[str], str]] = None,
+        timeout_seconds: float = 20.0,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("judge timeout_seconds must be positive")
         self._invoker = invoker
+        self.timeout_seconds = timeout_seconds
 
     def _default_invoker(self, prompt: str) -> str:
         from model.factory import chat_model
@@ -121,11 +147,32 @@ class LLMJudge:
             query=query, context=context or "（无）", answer=answer or "（空）",
         )
         invoker = self._invoker or self._default_invoker
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm-judge")
         try:
-            raw = invoker(prompt)
+            future = executor.submit(invoker, prompt)
+            raw = future.result(timeout=self.timeout_seconds)
+        except TimeoutError:
+            future.cancel()
+            return JudgeScore(
+                3.0,
+                3.0,
+                3.0,
+                rationale="judge timeout",
+                success=False,
+                error_code="timeout",
+            )
         except Exception as exc:
-            return JudgeScore(3.0, 3.0, 3.0, rationale=f"judge error: {exc}")
-        return _parse_judge_response(raw)
+            return JudgeScore(
+                3.0,
+                3.0,
+                3.0,
+                rationale=f"judge error: {exc}",
+                success=False,
+                error_code="invoke_error",
+            )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        return _parse_judge_response(str(raw))
 
 
 def evaluate_batch(

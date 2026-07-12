@@ -1,3 +1,5 @@
+import time
+
 from rag.judge import JudgeScore, LLMJudge, evaluate_batch
 
 
@@ -47,6 +49,20 @@ def test_judge_falls_back_when_invoker_fails():
 
     assert score.correctness == 3.0
     assert "judge error" in score.rationale
+    assert score.success is False
+    assert score.error_code == "invoke_error"
+
+
+def test_judge_times_out_and_returns_explicit_error():
+    def slow(_prompt: str):
+        time.sleep(0.05)
+        return '{"correctness": 5, "faithfulness": 5, "completeness": 5}'
+
+    score = LLMJudge(invoker=slow, timeout_seconds=0.01).evaluate("q", "c", "a")
+
+    assert score.success is False
+    assert score.error_code == "timeout"
+    assert score.rationale == "judge timeout"
 
 
 def test_judge_clips_scores_to_valid_range():

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -275,10 +276,15 @@ class AnswerVerifier:
                 answer=effective_answer,
             )
             overall_score = judge_score.overall
-            judge_payload = {"status": "evaluated", **judge_score.to_dict()}
-            if judge_score.overall < self.min_overall_score:
+            judge_payload = {
+                "status": "evaluated" if judge_score.success else "error",
+                **judge_score.to_dict(),
+            }
+            if not judge_score.success:
+                self._add_reason(reasons, "judge_unavailable")
+            elif judge_score.overall < self.min_overall_score:
                 self._add_reason(reasons, "judge_score_below_threshold")
-            if judge_score.faithfulness < self.min_faithfulness_score:
+            if judge_score.success and judge_score.faithfulness < self.min_faithfulness_score:
                 self._add_reason(reasons, "judge_faithfulness_below_threshold")
         else:
             judge_payload = {
@@ -691,6 +697,7 @@ class AnswerVerifier:
             "citation_coverage_below_threshold",
             "judge_faithfulness_below_threshold",
             "judge_score_below_threshold",
+            "judge_unavailable",
             "unsupported_claim_rate_exceeded",
         }
         return "retry" if retry_reasons.intersection(reasons) else "refuse"
@@ -703,3 +710,39 @@ class AnswerVerifier:
     @staticmethod
     def _dedupe(values: Sequence[str]) -> List[str]:
         return list(dict.fromkeys(values))
+
+
+def build_default_answer_verifier(
+    config: Optional[Mapping[str, Any]] = None,
+) -> AnswerVerifier:
+    """Build the production verifier, with an explicitly controlled semantic judge.
+
+    The judge is opt-in because it adds latency and model cost. Production and
+    online-evaluation deployments enable it with ``AGENT_LLM_JUDGE_ENABLED``;
+    deterministic CI keeps it disabled while exercising the same Runner path.
+    """
+    if config is None:
+        from utils.config_handler import agent_conf
+
+        config = agent_conf.get("answer_verifier") or {}
+    judge_config = dict(config.get("llm_judge") or {})
+    enabled_value = os.getenv(
+        "AGENT_LLM_JUDGE_ENABLED",
+        str(judge_config.get("enabled", False)),
+    )
+    enabled = enabled_value.strip().lower() in {"1", "true", "yes", "on"}
+    judge = None
+    if enabled:
+        timeout_seconds = float(
+            os.getenv(
+                "AGENT_LLM_JUDGE_TIMEOUT_SECONDS",
+                str(judge_config.get("timeout_seconds", 20.0)),
+            )
+        )
+        judge = LLMJudge(timeout_seconds=timeout_seconds)
+    return AnswerVerifier(
+        judge=judge,
+        min_overall_score=float(config.get("min_overall_score", 3.5)),
+        require_citation=bool(config.get("require_citation", True)),
+        min_faithfulness_score=float(config.get("min_faithfulness_score", 4.0)),
+    )

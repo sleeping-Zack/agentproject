@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
+from agent.verifier import AnswerVerifier
 from model.factory import chat_model, embed_model
 from observability.context import request_context
 from observability.metrics import metrics_registry
@@ -48,6 +49,7 @@ class RagResult:
     answer: str
     evidence: List[EvidenceChunk] = field(default_factory=list)
     citations: List[Citation] = field(default_factory=list)
+    verification: Optional[Dict[str, Any]] = None
 
 
 def _build_reranker(cfg: Dict[str, Any]) -> Optional[BaseReranker]:
@@ -61,7 +63,12 @@ def _build_reranker(cfg: Dict[str, Any]) -> Optional[BaseReranker]:
 
 
 class RagSummarizeService(object):
-    def __init__(self, enable_semantic_cache: bool = True):
+    def __init__(
+        self,
+        enable_semantic_cache: bool = True,
+        verifier: Optional[AnswerVerifier] = None,
+        verify_generation: bool = True,
+    ):
         self.vector_store_service = VectorStoreService()
         self.vector_store = self.vector_store_service.vector_store  # 保留字段兼容旧测试
         self._retrieval_cfg = chroma_conf.get("retrieval") or {}
@@ -70,6 +77,8 @@ class RagSummarizeService(object):
         self._prompt_version = request_context().prompt_version or "rag_summarize:unversioned"
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)
         self.model = chat_model
+        self.verifier = verifier or AnswerVerifier()
+        self.verify_generation = verify_generation
         self._chain = None
         self._semantic_cache = None
         if enable_semantic_cache and embed_model is not None:
@@ -230,6 +239,21 @@ class RagSummarizeService(object):
             context += f"【参考资料{counter}】: 参考资料：{doc.page_content} | 参考元数据：{doc.metadata}\n"
             safe_docs.append(doc)
 
+        if not evidence:
+            result = RagResult(
+                answer="请求未执行：知识库中没有足够证据支持回答该问题。",
+                evidence=[],
+                citations=[],
+                verification={
+                    "passed": False,
+                    "action": "refuse",
+                    "reasons": ["evidence_required"],
+                },
+            )
+            if self._semantic_cache is not None:
+                self._semantic_cache.set(query, deepcopy(result), namespace=cache_namespace)
+            return result
+
         answer = self.chain.invoke(
             {
                 "input": query,
@@ -238,10 +262,32 @@ class RagSummarizeService(object):
         )
         citations = format_citations(safe_docs)
         answer_with_citations = f"{answer}\n\n引用来源：\n{citations}" if citations else answer
+        verification = None
+        if getattr(self, "verify_generation", False):
+            verifier = getattr(self, "verifier", None) or AnswerVerifier()
+            verified = verifier.verify(
+                query=query,
+                answer=answer_with_citations,
+                evidence=[item.__dict__ for item in evidence],
+                scene="rag",
+            )
+            verification = {
+                "passed": verified.passed,
+                "action": verified.action,
+                "score": verified.score,
+                "reasons": list(verified.reasons),
+                **verified.quality,
+            }
+            if not verified.passed:
+                answer_with_citations = (
+                    "请求未执行：生成结果未通过证据一致性校验，"
+                    "知识库中没有足够证据支持该结论。"
+                )
         result = RagResult(
             answer=answer_with_citations,
             evidence=evidence,
             citations=citations_structured,
+            verification=verification,
         )
         if self._semantic_cache is not None:
             self._semantic_cache.set(query, deepcopy(result), namespace=cache_namespace)

@@ -133,3 +133,51 @@ def test_semantic_cache_isolates_tenants():
     assert service._chain.calls == 2
     assert tenant_a.answer != tenant_b.answer
     assert tenant_a_cached.answer == tenant_a.answer
+
+
+def test_rag_refuses_before_model_call_when_no_safe_evidence():
+    service = RagSummarizeService.__new__(RagSummarizeService)
+    service._semantic_cache = None
+    service._retrieval_cfg = {}
+    service._hybrid = FakeHybrid([])
+
+    class ExplodingChain:
+        def invoke(self, _payload):
+            raise AssertionError("model must not run without evidence")
+
+    service._chain = ExplodingChain()
+
+    result = service.rag_summarize_result("量子计算股票明天会涨吗")
+
+    assert result.answer.startswith("请求未执行")
+    assert result.evidence == []
+    assert result.verification["reasons"] == ["evidence_required"]
+
+
+def test_rag_refuses_generated_claim_that_is_not_grounded_in_evidence():
+    service = RagSummarizeService.__new__(RagSummarizeService)
+    service._semantic_cache = None
+    service._retrieval_cfg = {}
+    service.verify_generation = True
+    service.verifier = None
+    service._chain = type(
+        "UnsupportedChain",
+        (),
+        {"invoke": lambda self, payload: "可以直接用水冲洗电机。"},
+    )()
+    candidate = RetrievalCandidate(
+        doc_id="manual.pdf#c1",
+        document=Document(
+            page_content="滤网应每周拆下并使用干布清理。",
+            metadata={"source": "manual.pdf", "chunk_id": "c1"},
+        ),
+        dense_score=0.8,
+        fusion_score=0.5,
+    )
+    service._hybrid = FakeHybrid([candidate])
+
+    result = service.rag_summarize_result("滤网如何维护")
+
+    assert result.answer.startswith("请求未执行")
+    assert result.verification["passed"] is False
+    assert "unsupported_claim_rate_exceeded" in result.verification["reasons"]

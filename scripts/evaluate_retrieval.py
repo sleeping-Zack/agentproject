@@ -343,9 +343,12 @@ def main() -> None:
         reranker = strategies["hybrid_rerank"].reranker
         reranker_status = {
             "active": bool(getattr(reranker, "is_active", False)),
+            "operational": bool(getattr(reranker, "is_operational", False)),
+            "successful_calls": int(getattr(reranker, "successful_calls", 0)),
+            "failed_calls": int(getattr(reranker, "failed_calls", 0)),
             "error": getattr(reranker, "last_error", None),
         }
-        if not reranker_status["active"] and not args.allow_reranker_fallback:
+        if not reranker_status["operational"] and not args.allow_reranker_fallback:
             print(json.dumps({"reranker": reranker_status, "status": "failed"}, ensure_ascii=False))
             raise SystemExit(2)
 

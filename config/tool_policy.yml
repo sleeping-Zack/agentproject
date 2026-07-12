@@ -8,6 +8,21 @@ default:
   reason: no matching tool policy rule
 
 rules:
+  # Demonstrates a real tenant-specific entitlement: tenant-b purchases the
+  # knowledge-only tier and cannot use environment/weather tools.
+  - id: tenant-b-weather-disabled
+    priority: 400
+    match:
+      tenants: [tenant-b]
+      roles: [user]
+      scenes: ["*"]
+      tools: [get_weather, get_user_location]
+      data_scopes: [environment:read, user:read]
+      risk_levels: [low]
+    action: deny
+    reason_code: tenant_feature_not_enabled
+    reason: weather tools are not enabled for this tenant
+
   - id: report-data-admin
     priority: 300
     match:

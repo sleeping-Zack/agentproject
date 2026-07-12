@@ -52,6 +52,32 @@ def test_policy_denies_sensitive_data_outside_report_scene():
     assert decision.action == PolicyAction.DENY
 
 
+def test_default_policy_applies_real_tenant_entitlement_difference():
+    registry = build_default_tool_registry(["get_weather"])
+    policy = ToolPolicy(tool_registry=registry)
+
+    tenant_a = policy.decide(
+        tenant_id="tenant-a",
+        user_role="user",
+        scene="qa",
+        tool_name="get_weather",
+        args={"city": "合肥"},
+    )
+    tenant_b = policy.decide(
+        tenant_id="tenant-b",
+        user_role="user",
+        scene="qa",
+        tool_name="get_weather",
+        args={"city": "合肥"},
+    )
+
+    assert tenant_a.action == PolicyAction.ALLOW
+    assert tenant_a.matched_rule_id == "standard-tools"
+    assert tenant_b.action == PolicyAction.DENY
+    assert tenant_b.reason_code == "tenant_feature_not_enabled"
+    assert tenant_b.matched_rule_id == "tenant-b-weather-disabled"
+
+
 def test_policy_allows_admin_to_read_report_data():
     registry = build_default_tool_registry(["fetch_external_data"])
     policy = ToolPolicy(tool_registry=registry)

@@ -1,5 +1,5 @@
 from agent.answer_schema import AnswerClaim, StructuredAnswer
-from agent.verifier import AnswerVerifier
+from agent.verifier import AnswerVerifier, build_default_answer_verifier
 from rag.judge import JudgeScore
 
 
@@ -195,3 +195,44 @@ def test_evaluated_judge_must_meet_faithfulness_threshold():
     assert result.score == judge.score.overall
     assert result.passed is False
     assert "judge_faithfulness_below_threshold" in result.reasons
+
+
+def test_default_verifier_factory_wires_judge_only_when_enabled(monkeypatch):
+    config = {
+        "min_overall_score": 3.7,
+        "min_faithfulness_score": 4.1,
+        "llm_judge": {"enabled": False, "timeout_seconds": 9},
+    }
+    monkeypatch.delenv("AGENT_LLM_JUDGE_ENABLED", raising=False)
+
+    disabled = build_default_answer_verifier(config)
+    monkeypatch.setenv("AGENT_LLM_JUDGE_ENABLED", "true")
+    enabled = build_default_answer_verifier(config)
+
+    assert disabled.judge is None
+    assert enabled.judge is not None
+    assert enabled.judge.timeout_seconds == 9
+    assert enabled.min_overall_score == 3.7
+
+
+def test_judge_failure_is_explicit_and_fails_closed():
+    judge = CountingJudge(
+        JudgeScore(
+            3.0,
+            3.0,
+            3.0,
+            "judge timeout",
+            success=False,
+            error_code="timeout",
+        )
+    )
+    result = AnswerVerifier(judge=judge).verify(
+        query="滤网如何维护",
+        answer="滤网也许不用清理。\n\n引用来源：manual-current",
+        evidence=[{"id": "manual-current", "content": "滤网应当每周清理。"}],
+        scene="qa",
+    )
+
+    assert result.passed is False
+    assert result.judge["status"] == "error"
+    assert "judge_unavailable" in result.reasons

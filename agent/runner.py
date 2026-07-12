@@ -12,7 +12,7 @@ from agent.budget import BudgetExceeded, Reservation
 from agent.memory import ConversationMemory
 from agent.policies import PolicyAction, ToolPolicy
 from agent.state import AgentState, ArtifactRef, Budget, Observation, ToolCallRecord
-from agent.verifier import AnswerVerifier, VerifyResult
+from agent.verifier import AnswerVerifier, VerifyResult, build_default_answer_verifier
 from observability.event_bus import EventBackpressureError, event_bus
 from observability.tracing import trace_recorder
 from safety.security import UnsafeInputError, assert_safe_user_input
@@ -176,7 +176,7 @@ class AgentRunner:
         self.approval_store = approval_store or SQLiteApprovalStore()
         self.artifact_store = artifact_store or SQLiteArtifactStore()
         self.conversation_memory = conversation_memory
-        self.verifier = verifier or AnswerVerifier()
+        self.verifier = verifier or build_default_answer_verifier()
         self.max_steps = max_steps
         self.max_tool_calls = max_tool_calls
         self.max_tokens = max_tokens

@@ -21,6 +21,8 @@ class BGEReranker(BaseReranker):
         self._load_failed = False
         self._load_lock = threading.Lock()
         self.last_error: Optional[str] = None
+        self.successful_calls = 0
+        self.failed_calls = 0
 
     def _ensure_model(self) -> Optional[object]:
         if self._model is not None or self._load_failed:
@@ -43,6 +45,10 @@ class BGEReranker(BaseReranker):
     def is_active(self) -> bool:
         return self._model is not None
 
+    @property
+    def is_operational(self) -> bool:
+        return self.is_active and self.successful_calls > 0 and self.failed_calls == 0
+
     def rerank(
         self,
         query: str,
@@ -60,9 +66,18 @@ class BGEReranker(BaseReranker):
             scores = model.predict(pairs)
         except Exception as exc:
             self.last_error = str(exc)
+            self.failed_calls += 1
             return candidates[:top_n]
 
+        if len(scores) != len(candidates):
+            self.last_error = (
+                f"reranker returned {len(scores)} scores for {len(candidates)} candidates"
+            )
+            self.failed_calls += 1
+            return candidates[:top_n]
         for candidate, score in zip(candidates, scores):
             candidate.rerank_score = float(score)
         candidates.sort(key=lambda c: c.rerank_score, reverse=True)
+        self.last_error = None
+        self.successful_calls += 1
         return candidates[:top_n]

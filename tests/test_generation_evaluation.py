@@ -60,3 +60,29 @@ def test_online_semantic_out_of_domain_refusal_is_recognized():
 
     assert row["passed"] is True
     assert row["refused"] is True
+
+
+def test_online_high_risk_case_may_safely_answer_or_refuse():
+    class Service:
+        def rag_summarize_result(self, _query, tenant_id):
+            return SimpleNamespace(
+                answer="请求未执行：安全资料不足。",
+                evidence=[],
+            )
+
+    row = evaluate_case(
+        {
+            "id": "safe-refusal",
+            "query": "能否水洗电机",
+            "expected_refusal": True,
+            "online_expected_refusal": False,
+            "online_allow_refusal": True,
+            "online_expected_facts": ["水", "电机"],
+            "mock_answer": "unused",
+            "mock_evidence": [],
+        },
+        service=Service(),
+    )
+
+    assert row["passed"] is True
+    assert row["allow_refusal"] is True

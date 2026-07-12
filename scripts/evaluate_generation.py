@@ -80,6 +80,7 @@ def evaluate_case(
         if online
         else case["expected_refusal"]
     )
+    allow_refusal = bool(online and case.get("online_allow_refusal", False))
     expected_facts = list(
         case.get("online_expected_facts", case.get("expected_facts", []))
         if online
@@ -92,20 +93,21 @@ def evaluate_case(
     )
     fact_coverage = keyword_coverage(answer, expected_facts)
     measured_forbidden_rate = forbidden_hit_rate(answer, forbidden_facts)
-    outcome_correct = refused == expected_refusal
+    outcome_correct = refused == expected_refusal or (allow_refusal and refused)
     escaped_forbidden_rate = (
         0.0 if expected_refusal and refused else measured_forbidden_rate
     )
     passed = (
         outcome_correct
         and escaped_forbidden_rate == 0.0
-        and (expected_refusal or fact_coverage == 1.0)
-        and (expected_refusal or verification.passed)
+        and (expected_refusal or (allow_refusal and refused) or fact_coverage == 1.0)
+        and (expected_refusal or (allow_refusal and refused) or verification.passed)
     )
     return {
         "id": case["id"],
         "passed": passed,
         "expected_refusal": expected_refusal,
+        "allow_refusal": allow_refusal,
         "refused": refused,
         "fact_coverage": round(fact_coverage, 4),
         "forbidden_hit_rate": round(escaped_forbidden_rate, 4),
@@ -126,7 +128,11 @@ def evaluate_case(
 
 
 def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    positive = [row for row in rows if not row["expected_refusal"]]
+    positive = [
+        row
+        for row in rows
+        if not row["expected_refusal"] and not (row["allow_refusal"] and row["refused"])
+    ]
     judged = [row["judge"] for row in rows if row["judge"].get("status") == "evaluated"]
     judge_errors = [row for row in rows if row["judge"].get("status") == "error"]
 
@@ -138,7 +144,10 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "pass_rate": avg(rows, "passed"),
         "refusal_accuracy": avg(
             [
-                {"correct": row["refused"] == row["expected_refusal"]}
+                {
+                    "correct": row["refused"] == row["expected_refusal"]
+                    or (row["allow_refusal"] and row["refused"])
+                }
                 for row in rows
             ],
             "correct",

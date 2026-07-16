@@ -1,0 +1,4656 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-11T05:58:07.796662+00:00",
+  "baseline_commit": null,
+  "current_commit": "6c84db741cd0d36673472f0d06477e662c8ee798",
+  "mode": "online_retrievers",
+  "k": 5,
+  "strategies": {
+    "dense_only": {
+      "case_count": 30,
+      "recall_at_k": 0.8056,
+      "precision_at_k": 0.34,
+      "mrr": 0.8778,
+      "ndcg_at_k": 0.7683,
+      "hit_rate": 0.9333,
+      "latency_ms_avg": 253.918,
+      "latency_ms_p95": 338.888,
+      "per_case": [
+        {
+          "id": "retrieval-001",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.6,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:13",
+              "rank": 1,
+              "dense_score": 0.7273194574691276,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:11",
+              "rank": 2,
+              "dense_score": 0.4539877461287619,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:11",
+              "rank": 3,
+              "dense_score": 0.4155795759618752,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:6",
+              "rank": 4,
+              "dense_score": 0.4141151415635157,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:81",
+              "rank": 5,
+              "dense_score": 0.41402246064364023,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-002",
+          "recall_at_k": 0.5,
+          "precision_at_k": 0.2,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.3373519727104165,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:40",
+              "rank": 1,
+              "dense_score": 0.6857945489282846,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:19",
+              "rank": 2,
+              "dense_score": 0.6426088859687182,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:3",
+              "rank": 3,
+              "dense_score": 0.6371189217753863,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:39",
+              "rank": 4,
+              "dense_score": 0.6194650399270221,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:99",
+              "rank": 5,
+              "dense_score": 0.6185016472637601,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-003",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9197207891481876,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:28",
+              "rank": 1,
+              "dense_score": 0.7076283866245652,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:10",
+              "rank": 2,
+              "dense_score": 0.637582537109006,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:21",
+              "rank": 3,
+              "dense_score": 0.6227654753402132,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:8",
+              "rank": 4,
+              "dense_score": 0.543694278611107,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:29",
+              "rank": 5,
+              "dense_score": 0.5135534235138748,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-004",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.95583058934618,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:1",
+              "rank": 1,
+              "dense_score": 0.6780336914637612,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:29",
+              "rank": 2,
+              "dense_score": 0.6637733474169488,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:1",
+              "rank": 3,
+              "dense_score": 0.6533096125574219,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:88",
+              "rank": 4,
+              "dense_score": 0.6383776795530126,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:3",
+              "rank": 5,
+              "dense_score": 0.6341267905590524,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-005",
+          "recall_at_k": 0.5,
+          "precision_at_k": 0.2,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.7871546029909718,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:26",
+              "rank": 1,
+              "dense_score": 0.6315506908843695,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:3",
+              "rank": 2,
+              "dense_score": 0.6068342194841863,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:19",
+              "rank": 3,
+              "dense_score": 0.5958889358069982,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:40",
+              "rank": 4,
+              "dense_score": 0.5956757570472302,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:0",
+              "rank": 5,
+              "dense_score": 0.5875037781489074,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-006",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.95583058934618,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:0",
+              "rank": 1,
+              "dense_score": 0.6927359241437863,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:0",
+              "rank": 2,
+              "dense_score": 0.5145590894661933,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:1",
+              "rank": 3,
+              "dense_score": 0.5036848653755945,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:40",
+              "rank": 4,
+              "dense_score": 0.47126496159198417,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:19",
+              "rank": 5,
+              "dense_score": 0.4575199049150659,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-007",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.6,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:10",
+              "rank": 1,
+              "dense_score": 0.5932124844860109,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:9",
+              "rank": 2,
+              "dense_score": 0.5790755885584868,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:29",
+              "rank": 3,
+              "dense_score": 0.5146156926837434,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:28",
+              "rank": 4,
+              "dense_score": 0.4744104230432007,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:44",
+              "rank": 5,
+              "dense_score": 0.4478297122396837,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-008",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:1",
+              "rank": 1,
+              "dense_score": 0.653182898057374,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:10",
+              "rank": 2,
+              "dense_score": 0.576445372330316,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:83",
+              "rank": 3,
+              "dense_score": 0.5431427028046449,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:6",
+              "rank": 4,
+              "dense_score": 0.5224902412721248,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:2",
+              "rank": 5,
+              "dense_score": 0.5224461135217339,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-009",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 0.3333333333333333,
+          "ndcg_at_k": 0.5076850214429881,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:81",
+              "rank": 1,
+              "dense_score": 0.5879691215033161,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:96",
+              "rank": 2,
+              "dense_score": 0.5623225113033461,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:47",
+              "rank": 3,
+              "dense_score": 0.543640330645013,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:4",
+              "rank": 4,
+              "dense_score": 0.5413464041211107,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:54",
+              "rank": 5,
+              "dense_score": 0.5234891215818329,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-010",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:4",
+              "rank": 1,
+              "dense_score": 0.6334247505034064,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:1",
+              "rank": 2,
+              "dense_score": 0.6222892159520401,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:27",
+              "rank": 3,
+              "dense_score": 0.5863801853144555,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:18",
+              "rank": 4,
+              "dense_score": 0.5534667419347825,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:58",
+              "rank": 5,
+              "dense_score": 0.545299904951978,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-011",
+          "recall_at_k": 0.5,
+          "precision_at_k": 0.2,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.7871546029909718,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:5",
+              "rank": 1,
+              "dense_score": 0.5718535996255996,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:19",
+              "rank": 2,
+              "dense_score": 0.3993286784067417,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:24",
+              "rank": 3,
+              "dense_score": 0.3347149465349335,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:45",
+              "rank": 4,
+              "dense_score": 0.3136674847381692,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:22",
+              "rank": 5,
+              "dense_score": 0.29411294860935777,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-012",
+          "recall_at_k": 0.6666666666666666,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.5787412556559733,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:28",
+              "rank": 1,
+              "dense_score": 0.47069846580114927,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:27",
+              "rank": 2,
+              "dense_score": 0.46256007794108966,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:33",
+              "rank": 3,
+              "dense_score": 0.4503651402055535,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:0",
+              "rank": 4,
+              "dense_score": 0.4457856322337538,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:30",
+              "rank": 5,
+              "dense_score": 0.44210713958942005,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-013",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:10",
+              "rank": 1,
+              "dense_score": 0.42027465059229185,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:52",
+              "rank": 2,
+              "dense_score": 0.41312991683272504,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:99",
+              "rank": 3,
+              "dense_score": 0.4007885609454621,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:2",
+              "rank": 4,
+              "dense_score": 0.3933339635556432,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:14",
+              "rank": 5,
+              "dense_score": 0.3926221875779913,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-014",
+          "recall_at_k": 0.5,
+          "precision_at_k": 0.2,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.7871546029909718,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:43",
+              "rank": 1,
+              "dense_score": 0.7494050593649879,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:44",
+              "rank": 2,
+              "dense_score": 0.7332894742669986,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:46",
+              "rank": 3,
+              "dense_score": 0.7247468981297196,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:45",
+              "rank": 4,
+              "dense_score": 0.7217044435762637,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:47",
+              "rank": 5,
+              "dense_score": 0.5821375992496518,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-015",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 0.5,
+          "ndcg_at_k": 0.6653152460429406,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:0",
+              "rank": 1,
+              "dense_score": 0.7063962445817734,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:13",
+              "rank": 2,
+              "dense_score": 0.6337634847248885,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:14",
+              "rank": 3,
+              "dense_score": 0.6093025075203784,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:8",
+              "rank": 4,
+              "dense_score": 0.5976306964685594,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:26",
+              "rank": 5,
+              "dense_score": 0.5906296834624148,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-016",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.8339912323981488,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:0",
+              "rank": 1,
+              "dense_score": 0.7116730300153373,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:13",
+              "rank": 2,
+              "dense_score": 0.6443523746510684,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:26",
+              "rank": 3,
+              "dense_score": 0.6021779199543997,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:14",
+              "rank": 4,
+              "dense_score": 0.5982890723891481,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:3",
+              "rank": 5,
+              "dense_score": 0.597483898995196,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-017",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 0.5,
+          "ndcg_at_k": 0.5518544320968081,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:39",
+              "rank": 1,
+              "dense_score": 0.39692871041198585,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:3",
+              "rank": 2,
+              "dense_score": 0.3876318742737559,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:20",
+              "rank": 3,
+              "dense_score": 0.3786058316372083,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:0",
+              "rank": 4,
+              "dense_score": 0.37205675928764603,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:19",
+              "rank": 5,
+              "dense_score": 0.36709013251227374,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-018",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.8503449055347546,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:0",
+              "rank": 1,
+              "dense_score": 0.5144378751298759,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:1",
+              "rank": 2,
+              "dense_score": 0.3640853150945381,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:28",
+              "rank": 3,
+              "dense_score": 0.3430925177602925,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:1",
+              "rank": 4,
+              "dense_score": 0.23614830355862826,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:13",
+              "rank": 5,
+              "dense_score": 0.2065617216661627,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-019",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9176601606601069,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:1",
+              "rank": 1,
+              "dense_score": 0.4793560606880145,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:28",
+              "rank": 2,
+              "dense_score": 0.44316865011601536,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:16",
+              "rank": 3,
+              "dense_score": 0.3521019123916782,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:4",
+              "rank": 4,
+              "dense_score": 0.34372063224365024,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:16",
+              "rank": 5,
+              "dense_score": 0.33437604372605745,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-020",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.7309292742059024,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:1",
+              "rank": 1,
+              "dense_score": 0.36405193479051745,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:6",
+              "rank": 2,
+              "dense_score": 0.29417802334345866,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:5",
+              "rank": 3,
+              "dense_score": 0.2872325598836514,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:24",
+              "rank": 4,
+              "dense_score": 0.2641870002926826,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:32",
+              "rank": 5,
+              "dense_score": 0.25867141081545597,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-021",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.95583058934618,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:19",
+              "rank": 1,
+              "dense_score": 0.5911016860188882,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:99",
+              "rank": 2,
+              "dense_score": 0.5205655632880263,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:36",
+              "rank": 3,
+              "dense_score": 0.5021154853244428,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:12",
+              "rank": 4,
+              "dense_score": 0.4947767074743319,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:89",
+              "rank": 5,
+              "dense_score": 0.4853720596976111,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-022",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:0",
+              "rank": 1,
+              "dense_score": 0.7935109987617897,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:3",
+              "rank": 2,
+              "dense_score": 0.6460963690956008,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:2",
+              "rank": 3,
+              "dense_score": 0.6431615997400901,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:18",
+              "rank": 4,
+              "dense_score": 0.6114375825722431,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:1",
+              "rank": 5,
+              "dense_score": 0.6095994742149862,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-023",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:0",
+              "rank": 1,
+              "dense_score": 0.5336576388409653,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:40",
+              "rank": 2,
+              "dense_score": 0.47534570375850593,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:2",
+              "rank": 3,
+              "dense_score": 0.4398513981102684,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:43",
+              "rank": 4,
+              "dense_score": 0.4260497803626485,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:35",
+              "rank": 5,
+              "dense_score": 0.4144649604061561,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-024",
+          "recall_at_k": 0.5,
+          "precision_at_k": 0.2,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.7871546029909718,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:1",
+              "rank": 1,
+              "dense_score": 0.6629778045778815,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:31",
+              "rank": 2,
+              "dense_score": 0.5708332244231509,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:5",
+              "rank": 3,
+              "dense_score": 0.5668960344226572,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:16",
+              "rank": 4,
+              "dense_score": 0.5655115947427714,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:27",
+              "rank": 5,
+              "dense_score": 0.550996093675074,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-025",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.7309292742059024,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:36",
+              "rank": 1,
+              "dense_score": 0.5365259426163742,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:31",
+              "rank": 2,
+              "dense_score": 0.5226390617942167,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:14",
+              "rank": 3,
+              "dense_score": 0.5225404803155498,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:2",
+              "rank": 4,
+              "dense_score": 0.4771501367838029,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:32",
+              "rank": 5,
+              "dense_score": 0.46718299716685563,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-026",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.8339912323981488,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:4",
+              "rank": 1,
+              "dense_score": 0.6935173056417541,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:2",
+              "rank": 2,
+              "dense_score": 0.6706019165924111,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:19",
+              "rank": 3,
+              "dense_score": 0.5805897562380893,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:39",
+              "rank": 4,
+              "dense_score": 0.57027085902347,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:43",
+              "rank": 5,
+              "dense_score": 0.5474329991019629,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-027",
+          "recall_at_k": 0.5,
+          "precision_at_k": 0.2,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.7871546029909718,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:3",
+              "rank": 1,
+              "dense_score": 0.6401186394244521,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:26",
+              "rank": 2,
+              "dense_score": 0.5982501708479726,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:21",
+              "rank": 3,
+              "dense_score": 0.5697357204879272,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:8",
+              "rank": 4,
+              "dense_score": 0.555648473547949,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:31",
+              "rank": 5,
+              "dense_score": 0.540923713377395,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-028",
+          "recall_at_k": 0.5,
+          "precision_at_k": 0.2,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.7871546029909718,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:5",
+              "rank": 1,
+              "dense_score": 0.6194892743649159,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:7",
+              "rank": 2,
+              "dense_score": 0.5562616259000854,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:11",
+              "rank": 3,
+              "dense_score": 0.3820987517075487,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:31",
+              "rank": 4,
+              "dense_score": 0.34878997088884356,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:11",
+              "rank": 5,
+              "dense_score": 0.34004774513016844,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-029",
+          "recall_at_k": 0.0,
+          "precision_at_k": 0.0,
+          "mrr": 0.0,
+          "ndcg_at_k": 0.0,
+          "hit_rate": 0.0,
+          "retrieved": [
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:2",
+              "rank": 1,
+              "dense_score": 0.7240310128343379,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:20",
+              "rank": 2,
+              "dense_score": 0.6434863833547151,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:24",
+              "rank": 3,
+              "dense_score": 0.6314355035473892,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:65",
+              "rank": 4,
+              "dense_score": 0.6063906239036092,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:35",
+              "rank": 5,
+              "dense_score": 0.5967823647017321,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-030",
+          "recall_at_k": 0.0,
+          "precision_at_k": 0.0,
+          "mrr": 0.0,
+          "ndcg_at_k": 0.0,
+          "hit_rate": 0.0,
+          "retrieved": [
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:75",
+              "rank": 1,
+              "dense_score": 0.5184913904322597,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "dense_rank": 1,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:86",
+              "rank": 2,
+              "dense_score": 0.49695987208034775,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "dense_rank": 2,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:98",
+              "rank": 3,
+              "dense_score": 0.49565799807669475,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "dense_rank": 3,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:20",
+              "rank": 4,
+              "dense_score": 0.4789498493620665,
+              "sparse_score": null,
+              "fusion_score": 0.015625,
+              "rerank_score": null,
+              "dense_rank": 4,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:48",
+              "rank": 5,
+              "dense_score": 0.4777060958625101,
+              "sparse_score": null,
+              "fusion_score": 0.015384615384615385,
+              "rerank_score": null,
+              "dense_rank": 5,
+              "retrieved_by": [
+                "dense"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        }
+      ]
+    },
+    "hybrid": {
+      "case_count": 30,
+      "recall_at_k": 0.9333,
+      "precision_at_k": 0.3933,
+      "mrr": 0.9333,
+      "ndcg_at_k": 0.9035,
+      "hit_rate": 0.9333,
+      "latency_ms_avg": 266.578,
+      "latency_ms_p95": 385.224,
+      "per_case": [
+        {
+          "id": "retrieval-001",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.6,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9838988741111756,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:13",
+              "rank": 1,
+              "dense_score": 0.7273194574691276,
+              "sparse_score": 10.898325126860982,
+              "fusion_score": 0.03252247488101534,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 2,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:11",
+              "rank": 2,
+              "dense_score": 0.4539877461287619,
+              "sparse_score": 10.557650480329057,
+              "fusion_score": 0.03200204813108039,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 3,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:17",
+              "rank": 3,
+              "dense_score": 0.4112118137569942,
+              "sparse_score": 11.508992063591007,
+              "fusion_score": 0.031544957774465976,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 1,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:11",
+              "rank": 4,
+              "dense_score": 0.4155795759618752,
+              "sparse_score": 7.397879102864182,
+              "fusion_score": 0.031024531024531024,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 6,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:6",
+              "rank": 5,
+              "dense_score": 0.4141151415635157,
+              "sparse_score": 8.110282059837532,
+              "fusion_score": 0.031009615384615385,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 4,
+              "bm25_rank": 5,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-002",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9176601606601069,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:12",
+              "rank": 1,
+              "dense_score": 0.5641789956865539,
+              "sparse_score": 9.700069968564236,
+              "fusion_score": 0.02821939586645469,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 14,
+              "bm25_rank": 8,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:25",
+              "rank": 2,
+              "dense_score": 0.6061461300353974,
+              "sparse_score": 7.724882695159858,
+              "fusion_score": 0.027972027972027972,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 18,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:50",
+              "rank": 3,
+              "dense_score": 0.5693137883874846,
+              "sparse_score": 8.75873585051363,
+              "fusion_score": 0.0273972602739726,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 13,
+              "bm25_rank": 13,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:0",
+              "rank": 4,
+              "dense_score": null,
+              "sparse_score": 10.92692634146632,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "bm25_rank": 1,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:40",
+              "rank": 5,
+              "dense_score": 0.6857945489282846,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "retrieved_by": [],
+              "dense_rank": 1,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-003",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.8772153153380492,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:21",
+              "rank": 1,
+              "dense_score": 0.6227654753402132,
+              "sparse_score": 16.61211249979194,
+              "fusion_score": 0.032266458495966696,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:10",
+              "rank": 2,
+              "dense_score": 0.637582537109006,
+              "sparse_score": 13.735019511265989,
+              "fusion_score": 0.03225806451612903,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 2,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:8",
+              "rank": 3,
+              "dense_score": 0.543694278611107,
+              "sparse_score": 9.714327504780709,
+              "fusion_score": 0.03149801587301587,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 4,
+              "bm25_rank": 3,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:28",
+              "rank": 4,
+              "dense_score": 0.7076283866245652,
+              "sparse_score": 6.38343817639584,
+              "fusion_score": 0.03131881575727918,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 7,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:10",
+              "rank": 5,
+              "dense_score": 0.5000744398916057,
+              "sparse_score": 6.49800445455859,
+              "fusion_score": 0.030303030303030304,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 6,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-004",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.95583058934618,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:1",
+              "rank": 1,
+              "dense_score": 0.6780336914637612,
+              "sparse_score": 13.487864286041992,
+              "fusion_score": 0.032266458495966696,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 3,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:3",
+              "rank": 2,
+              "dense_score": 0.6341267905590524,
+              "sparse_score": 11.889231646847769,
+              "fusion_score": 0.030309988518943745,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 5,
+              "bm25_rank": 7,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:1",
+              "rank": 3,
+              "dense_score": 0.6533096125574219,
+              "sparse_score": 11.019437418758393,
+              "fusion_score": 0.030158730158730156,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 10,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:21",
+              "rank": 4,
+              "dense_score": 0.5830712783847136,
+              "sparse_score": 11.288340104753177,
+              "fusion_score": 0.02821939586645469,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 14,
+              "bm25_rank": 8,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:0",
+              "rank": 5,
+              "dense_score": 0.5695905667416556,
+              "sparse_score": 11.19456517420695,
+              "fusion_score": 0.026992753623188405,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 20,
+              "bm25_rank": 9,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-005",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9176601606601069,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:26",
+              "rank": 1,
+              "dense_score": 0.6315506908843695,
+              "sparse_score": 10.394194173057066,
+              "fusion_score": 0.032266458495966696,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 3,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:24",
+              "rank": 2,
+              "dense_score": 0.5746184328879143,
+              "sparse_score": 10.436826961269006,
+              "fusion_score": 0.03128054740957967,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 2,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:63",
+              "rank": 3,
+              "dense_score": 0.5649552563424276,
+              "sparse_score": 9.136701453124425,
+              "fusion_score": 0.029631255487269532,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 8,
+              "bm25_rank": 7,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:41",
+              "rank": 4,
+              "dense_score": 0.5087099498298514,
+              "sparse_score": 9.826348395249262,
+              "fusion_score": 0.029138513513513514,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 14,
+              "bm25_rank": 4,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:4",
+              "rank": 5,
+              "dense_score": 0.5080480335739879,
+              "sparse_score": 7.482801056489405,
+              "fusion_score": 0.02666666666666667,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 15,
+              "bm25_rank": 15,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-006",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.95583058934618,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:0",
+              "rank": 1,
+              "dense_score": 0.6927359241437863,
+              "sparse_score": 24.414471077961757,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:0",
+              "rank": 2,
+              "dense_score": 0.5145590894661933,
+              "sparse_score": 9.935609179854296,
+              "fusion_score": 0.031754032258064516,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 4,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:1",
+              "rank": 3,
+              "dense_score": 0.5036848653755945,
+              "sparse_score": 10.345801706069267,
+              "fusion_score": 0.031746031746031744,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 3,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:31",
+              "rank": 4,
+              "dense_score": 0.4514805565513943,
+              "sparse_score": 13.160663445203243,
+              "fusion_score": 0.03128054740957967,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 2,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:18",
+              "rank": 5,
+              "dense_score": 0.44840320440737147,
+              "sparse_score": 9.580225801695729,
+              "fusion_score": 0.029877369007803793,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 9,
+              "bm25_rank": 5,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-007",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.6,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9838988741111756,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:10",
+              "rank": 1,
+              "dense_score": 0.5932124844860109,
+              "sparse_score": 8.204868378017233,
+              "fusion_score": 0.032266458495966696,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 3,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:9",
+              "rank": 2,
+              "dense_score": 0.5790755885584868,
+              "sparse_score": 8.434964537766735,
+              "fusion_score": 0.03225806451612903,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 2,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:27",
+              "rank": 3,
+              "dense_score": 0.4177833503768129,
+              "sparse_score": 9.614510854066808,
+              "fusion_score": 0.030886196246139225,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 9,
+              "bm25_rank": 1,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:29",
+              "rank": 4,
+              "dense_score": 0.5146156926837434,
+              "sparse_score": 4.163001202077283,
+              "fusion_score": 0.030158730158730156,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 10,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:8",
+              "rank": 5,
+              "dense_score": 0.42578396018909037,
+              "sparse_score": 6.451782220387939,
+              "fusion_score": 0.03007688828584351,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 7,
+              "bm25_rank": 6,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-008",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9324441894571632,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:1",
+              "rank": 1,
+              "dense_score": 0.653182898057374,
+              "sparse_score": 19.64250305525779,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:0",
+              "rank": 2,
+              "dense_score": 0.5156132664411477,
+              "sparse_score": 9.525261773388884,
+              "fusion_score": 0.029418126757516764,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 9,
+              "bm25_rank": 7,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:31",
+              "rank": 3,
+              "dense_score": 0.48778353378201034,
+              "sparse_score": 16.02596388991418,
+              "fusion_score": 0.028949545078577336,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 18,
+              "bm25_rank": 2,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:10",
+              "rank": 4,
+              "dense_score": 0.576445372330316,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "retrieved_by": [],
+              "dense_rank": 2,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:17",
+              "rank": 5,
+              "dense_score": null,
+              "sparse_score": 11.861090089638711,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "bm25_rank": 3,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-009",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:4",
+              "rank": 1,
+              "dense_score": 0.5413464041211107,
+              "sparse_score": 6.918803795953776,
+              "fusion_score": 0.031754032258064516,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 4,
+              "bm25_rank": 2,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:47",
+              "rank": 2,
+              "dense_score": 0.543640330645013,
+              "sparse_score": 5.7649984703956,
+              "fusion_score": 0.03125763125763126,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 5,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:96",
+              "rank": 3,
+              "dense_score": 0.5623225113033461,
+              "sparse_score": 5.689758878597004,
+              "fusion_score": 0.031054405392392875,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 7,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:81",
+              "rank": 4,
+              "dense_score": 0.5879691215033161,
+              "sparse_score": 5.519746082067967,
+              "fusion_score": 0.030886196246139225,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 9,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:68",
+              "rank": 5,
+              "dense_score": 0.5228328108568213,
+              "sparse_score": 5.988914719555286,
+              "fusion_score": 0.030776515151515152,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 4,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-010",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:4",
+              "rank": 1,
+              "dense_score": 0.6334247505034064,
+              "sparse_score": 16.673285161931688,
+              "fusion_score": 0.03252247488101534,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 2,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:1",
+              "rank": 2,
+              "dense_score": 0.6222892159520401,
+              "sparse_score": 13.294774037946572,
+              "fusion_score": 0.03200204813108039,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 3,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:3",
+              "rank": 3,
+              "dense_score": 0.5333927880449228,
+              "sparse_score": 11.620069574980752,
+              "fusion_score": 0.03007688828584351,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 7,
+              "bm25_rank": 6,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:0",
+              "rank": 4,
+              "dense_score": 0.4975528360920475,
+              "sparse_score": 19.431666957838083,
+              "fusion_score": 0.029906956136464335,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 14,
+              "bm25_rank": 1,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:11",
+              "rank": 5,
+              "dense_score": 0.5154013099399865,
+              "sparse_score": 10.946275587433576,
+              "fusion_score": 0.029211087420042643,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 10,
+              "bm25_rank": 7,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-011",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.95583058934618,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:5",
+              "rank": 1,
+              "dense_score": 0.5718535996255996,
+              "sparse_score": 11.246288846129415,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:19",
+              "rank": 2,
+              "dense_score": 0.3993286784067417,
+              "sparse_score": 6.018733487074218,
+              "fusion_score": 0.03128054740957967,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 6,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:31",
+              "rank": 3,
+              "dense_score": 0.2736858041289768,
+              "sparse_score": 10.527160395875434,
+              "fusion_score": 0.03021353930031804,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 11,
+              "bm25_rank": 2,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:5",
+              "rank": 4,
+              "dense_score": 0.2776272931080186,
+              "sparse_score": 5.540291110699341,
+              "fusion_score": 0.029411764705882353,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 8,
+              "bm25_rank": 8,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:24",
+              "rank": 5,
+              "dense_score": 0.3347149465349335,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "retrieved_by": [],
+              "dense_rank": 3,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-012",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.6,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.8379403960531939,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:28",
+              "rank": 1,
+              "dense_score": 0.47069846580114927,
+              "sparse_score": 9.870770322173305,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:0",
+              "rank": 2,
+              "dense_score": 0.4457856322337538,
+              "sparse_score": 8.709325076834126,
+              "fusion_score": 0.03149801587301587,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 4,
+              "bm25_rank": 3,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:30",
+              "rank": 3,
+              "dense_score": 0.44210713958942005,
+              "sparse_score": 5.006701942963057,
+              "fusion_score": 0.029083245521601686,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 5,
+              "bm25_rank": 13,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:9",
+              "rank": 4,
+              "dense_score": null,
+              "sparse_score": 8.991085155122919,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "bm25_rank": 2,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:27",
+              "rank": 5,
+              "dense_score": 0.46256007794108966,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "retrieved_by": [],
+              "dense_rank": 2,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-013",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.95583058934618,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:10",
+              "rank": 1,
+              "dense_score": 0.42027465059229185,
+              "sparse_score": 7.52236902653682,
+              "fusion_score": 0.030886196246139225,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 9,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:29",
+              "rank": 2,
+              "dense_score": 0.37293665904400797,
+              "sparse_score": 9.407022286289338,
+              "fusion_score": 0.030886196246139225,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 9,
+              "bm25_rank": 1,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:52",
+              "rank": 3,
+              "dense_score": 0.41312991683272504,
+              "sparse_score": 7.187922239341324,
+              "fusion_score": 0.030017921146953404,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 12,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:19",
+              "rank": 4,
+              "dense_score": 0.39250969763931565,
+              "sparse_score": 7.419919862911531,
+              "fusion_score": 0.029437229437229435,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 10,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:28",
+              "rank": 5,
+              "dense_score": 0.3703468616435591,
+              "sparse_score": 7.876869105719244,
+              "fusion_score": 0.029437229437229435,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 10,
+              "bm25_rank": 6,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-014",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:43",
+              "rank": 1,
+              "dense_score": 0.7494050593649879,
+              "sparse_score": 9.53863082704946,
+              "fusion_score": 0.03131881575727918,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 7,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:6",
+              "rank": 2,
+              "dense_score": 0.5746857414049862,
+              "sparse_score": 11.287102403856169,
+              "fusion_score": 0.030776515151515152,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 4,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:12",
+              "rank": 3,
+              "dense_score": 0.5103154918770254,
+              "sparse_score": 14.358936971744725,
+              "fusion_score": 0.02964254577157803,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 14,
+              "bm25_rank": 2,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:11",
+              "rank": 4,
+              "dense_score": 0.5117640790603448,
+              "sparse_score": 11.636772791493675,
+              "fusion_score": 0.029571646010002173,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 13,
+              "bm25_rank": 3,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:46",
+              "rank": 5,
+              "dense_score": 0.7247468981297196,
+              "sparse_score": 8.76228961234823,
+              "fusion_score": 0.029386529386529386,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 14,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-015",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:13",
+              "rank": 1,
+              "dense_score": 0.6337634847248885,
+              "sparse_score": 12.87334191453057,
+              "fusion_score": 0.03225806451612903,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 2,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:14",
+              "rank": 2,
+              "dense_score": 0.6093025075203784,
+              "sparse_score": 9.835791805188123,
+              "fusion_score": 0.031746031746031744,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 3,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:23",
+              "rank": 3,
+              "dense_score": 0.5215834518264129,
+              "sparse_score": 13.07741137348658,
+              "fusion_score": 0.030679156908665108,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 10,
+              "bm25_rank": 1,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:0",
+              "rank": 4,
+              "dense_score": 0.7063962445817734,
+              "sparse_score": 8.595167085777708,
+              "fusion_score": 0.030679156908665108,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 10,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:26",
+              "rank": 5,
+              "dense_score": 0.5906296834624148,
+              "sparse_score": 7.79637775174808,
+              "fusion_score": 0.02854251012145749,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 5,
+              "bm25_rank": 16,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-016",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.95583058934618,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:13",
+              "rank": 1,
+              "dense_score": 0.6443523746510684,
+              "sparse_score": 29.74058205208376,
+              "fusion_score": 0.03252247488101534,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:26",
+              "rank": 2,
+              "dense_score": 0.6021779199543997,
+              "sparse_score": 15.014626606951778,
+              "fusion_score": 0.03149801587301587,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 4,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:0",
+              "rank": 3,
+              "dense_score": 0.7116730300153373,
+              "sparse_score": 8.80066087910877,
+              "fusion_score": 0.03009207275993712,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 13,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:1",
+              "rank": 4,
+              "dense_score": 0.5329168658315379,
+              "sparse_score": 16.175407749946487,
+              "fusion_score": 0.029827662395050816,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 13,
+              "bm25_rank": 2,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:0",
+              "rank": 5,
+              "dense_score": 0.5323920954207286,
+              "sparse_score": 7.0013877124261406,
+              "fusion_score": 0.026013513513513515,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 14,
+              "bm25_rank": 20,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-017",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:0",
+              "rank": 1,
+              "dense_score": 0.37205675928764603,
+              "sparse_score": 9.109321606737574,
+              "fusion_score": 0.032018442622950824,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 4,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:3",
+              "rank": 2,
+              "dense_score": 0.3876318742737559,
+              "sparse_score": 5.753239767934507,
+              "fusion_score": 0.03128054740957967,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 6,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:79",
+              "rank": 3,
+              "dense_score": 0.3384619278080975,
+              "sparse_score": 5.897895356363939,
+              "fusion_score": 0.029877369007803793,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 9,
+              "bm25_rank": 5,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:29",
+              "rank": 4,
+              "dense_score": 0.3294810244463051,
+              "sparse_score": 7.679457279282445,
+              "fusion_score": 0.02976190476190476,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 12,
+              "bm25_rank": 3,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:10",
+              "rank": 5,
+              "dense_score": 0.355530769252282,
+              "sparse_score": 4.8668543932881,
+              "fusion_score": 0.029437229437229435,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 10,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-018",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9197207891481876,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:0",
+              "rank": 1,
+              "dense_score": 0.5144378751298759,
+              "sparse_score": 24.166069981219785,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:1",
+              "rank": 2,
+              "dense_score": 0.3640853150945381,
+              "sparse_score": 10.045152042510974,
+              "fusion_score": 0.031054405392392875,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 7,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:13",
+              "rank": 3,
+              "dense_score": 0.2065617216661627,
+              "sparse_score": 17.374016153994077,
+              "fusion_score": 0.03076923076923077,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 5,
+              "bm25_rank": 5,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:28",
+              "rank": 4,
+              "dense_score": 0.3430925177602925,
+              "sparse_score": 9.409181881535783,
+              "fusion_score": 0.03036576949620428,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 9,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:13",
+              "rank": 5,
+              "dense_score": 0.18130075513006738,
+              "sparse_score": 17.486377180457616,
+              "fusion_score": 0.030330882352941176,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 8,
+              "bm25_rank": 4,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-019",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:1",
+              "rank": 1,
+              "dense_score": 0.4793560606880145,
+              "sparse_score": 12.131111315616808,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:16",
+              "rank": 2,
+              "dense_score": 0.33437604372605745,
+              "sparse_score": 6.729690275990748,
+              "fusion_score": 0.03125763125763126,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 5,
+              "bm25_rank": 3,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:20",
+              "rank": 3,
+              "dense_score": 0.305919334548472,
+              "sparse_score": 4.427679201481662,
+              "fusion_score": 0.029411764705882353,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 8,
+              "bm25_rank": 8,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:4",
+              "rank": 4,
+              "dense_score": 0.2815221676726074,
+              "sparse_score": 4.468061643694184,
+              "fusion_score": 0.028850145288501453,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 13,
+              "bm25_rank": 6,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:16",
+              "rank": 5,
+              "dense_score": 0.3521019123916782,
+              "sparse_score": 3.7759343096719307,
+              "fusion_score": 0.028693528693528692,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 18,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-020",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:5",
+              "rank": 1,
+              "dense_score": 0.2872325598836514,
+              "sparse_score": 8.477931670956494,
+              "fusion_score": 0.03200204813108039,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 2,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:1",
+              "rank": 2,
+              "dense_score": 0.36405193479051745,
+              "sparse_score": 6.771030384785343,
+              "fusion_score": 0.03177805800756621,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 5,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:13",
+              "rank": 3,
+              "dense_score": 0.22679659222363702,
+              "sparse_score": 10.953461930883378,
+              "fusion_score": 0.031099324975891997,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 8,
+              "bm25_rank": 1,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:15",
+              "rank": 4,
+              "dense_score": 0.22763683179555017,
+              "sparse_score": 5.855832148105806,
+              "fusion_score": 0.03007688828584351,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 7,
+              "bm25_rank": 6,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:22",
+              "rank": 5,
+              "dense_score": 0.24518972979488218,
+              "sparse_score": 5.03094930125565,
+              "fusion_score": 0.02964426877470356,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 9,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-021",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:19",
+              "rank": 1,
+              "dense_score": 0.5911016860188882,
+              "sparse_score": 6.612575356783124,
+              "fusion_score": 0.030679156908665108,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 10,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:36",
+              "rank": 2,
+              "dense_score": 0.5021154853244428,
+              "sparse_score": 6.438925625732808,
+              "fusion_score": 0.029571646010002173,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 13,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:10",
+              "rank": 3,
+              "dense_score": 0.46453271903879356,
+              "sparse_score": 7.395248935176057,
+              "fusion_score": 0.029418126757516764,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 9,
+              "bm25_rank": 7,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:27",
+              "rank": 4,
+              "dense_score": 0.4816115492860751,
+              "sparse_score": 6.3554196279617035,
+              "fusion_score": 0.028665028665028666,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 14,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:33",
+              "rank": 5,
+              "dense_score": 0.42364614559207225,
+              "sparse_score": 6.494264133624324,
+              "fusion_score": 0.02758751902587519,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 13,
+              "bm25_rank": 12,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-022",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:0",
+              "rank": 1,
+              "dense_score": 0.7935109987617897,
+              "sparse_score": 25.800574798079005,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:3",
+              "rank": 2,
+              "dense_score": 0.6460963690956008,
+              "sparse_score": 23.263927093492484,
+              "fusion_score": 0.03225806451612903,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 2,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:49",
+              "rank": 3,
+              "dense_score": 0.5406144398030219,
+              "sparse_score": 20.99979500329422,
+              "fusion_score": 0.03057889822595705,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 8,
+              "bm25_rank": 3,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:2",
+              "rank": 4,
+              "dense_score": 0.6431615997400901,
+              "sparse_score": 16.58238487934697,
+              "fusion_score": 0.03036576949620428,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 9,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:1",
+              "rank": 5,
+              "dense_score": 0.6095994742149862,
+              "sparse_score": 16.692586697183643,
+              "fusion_score": 0.030090497737556562,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 5,
+              "bm25_rank": 8,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-023",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:0",
+              "rank": 1,
+              "dense_score": 0.5336576388409653,
+              "sparse_score": 12.692840723043656,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:40",
+              "rank": 2,
+              "dense_score": 0.47534570375850593,
+              "sparse_score": 6.665486926599916,
+              "fusion_score": 0.0315136476426799,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 5,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:43",
+              "rank": 3,
+              "dense_score": 0.4260497803626485,
+              "sparse_score": 6.675032834336362,
+              "fusion_score": 0.03125,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 4,
+              "bm25_rank": 4,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:38",
+              "rank": 4,
+              "dense_score": 0.39282423956975243,
+              "sparse_score": 7.156048534169036,
+              "fusion_score": 0.031054405392392875,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 7,
+              "bm25_rank": 2,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:2",
+              "rank": 5,
+              "dense_score": 0.4398513981102684,
+              "sparse_score": 6.567849046589911,
+              "fusion_score": 0.031024531024531024,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 6,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-024",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:1",
+              "rank": 1,
+              "dense_score": 0.6629778045778815,
+              "sparse_score": 17.877767032354644,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:13",
+              "rank": 2,
+              "dense_score": 0.5457478838048004,
+              "sparse_score": 7.241183653379606,
+              "fusion_score": 0.031054405392392875,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 7,
+              "bm25_rank": 2,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:5",
+              "rank": 3,
+              "dense_score": 0.5668960344226572,
+              "sparse_score": 3.266280987005123,
+              "fusion_score": 0.029386529386529386,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 14,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:15",
+              "rank": 4,
+              "dense_score": 0.5281325663228237,
+              "sparse_score": 6.145785345386077,
+              "fusion_score": 0.029030910609857977,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 16,
+              "bm25_rank": 3,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:19",
+              "rank": 5,
+              "dense_score": 0.5292677495406162,
+              "sparse_score": 3.1533376557924546,
+              "fusion_score": 0.02666666666666667,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 15,
+              "bm25_rank": 15,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-025",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:14",
+              "rank": 1,
+              "dense_score": 0.5225404803155498,
+              "sparse_score": 11.724318662420565,
+              "fusion_score": 0.031746031746031744,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 3,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:36",
+              "rank": 2,
+              "dense_score": 0.5365259426163742,
+              "sparse_score": 8.89586170141032,
+              "fusion_score": 0.031544957774465976,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 6,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:20",
+              "rank": 3,
+              "dense_score": 0.45482735349794745,
+              "sparse_score": 15.600796190514682,
+              "fusion_score": 0.03131881575727918,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 7,
+              "bm25_rank": 1,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:45",
+              "rank": 4,
+              "dense_score": 0.4304589307727672,
+              "sparse_score": 13.729052519822785,
+              "fusion_score": 0.03021353930031804,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 11,
+              "bm25_rank": 2,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "94bd6c0b4283b8524f4e8dfc5b72f8ab:2",
+              "rank": 5,
+              "dense_score": 0.4771501367838029,
+              "sparse_score": 5.72845415501074,
+              "fusion_score": 0.028958333333333336,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 4,
+              "bm25_rank": 15,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-026",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:2",
+              "rank": 1,
+              "dense_score": 0.6706019165924111,
+              "sparse_score": 15.423925374733805,
+              "fusion_score": 0.03252247488101534,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:4",
+              "rank": 2,
+              "dense_score": 0.6935173056417541,
+              "sparse_score": 10.20006555475638,
+              "fusion_score": 0.031544957774465976,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 6,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:43",
+              "rank": 3,
+              "dense_score": 0.5474329991019629,
+              "sparse_score": 12.440600564371781,
+              "fusion_score": 0.0315136476426799,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 5,
+              "bm25_rank": 2,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:7",
+              "rank": 4,
+              "dense_score": 0.538753319266478,
+              "sparse_score": 9.766295700263754,
+              "fusion_score": 0.029857397504456328,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 6,
+              "bm25_rank": 8,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:34",
+              "rank": 5,
+              "dense_score": 0.5051213985602399,
+              "sparse_score": 9.915781398994476,
+              "fusion_score": 0.029211087420042643,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 10,
+              "bm25_rank": 7,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-027",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 1.0,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:3",
+              "rank": 1,
+              "dense_score": 0.6401186394244521,
+              "sparse_score": 13.827824460910374,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:17",
+              "rank": 2,
+              "dense_score": null,
+              "sparse_score": 7.184777056382158,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "bm25_rank": 2,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:26",
+              "rank": 3,
+              "dense_score": 0.5982501708479726,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "retrieved_by": [],
+              "dense_rank": 2,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "6d726f4604d9e7ebcf59a932ae9e9c00:24",
+              "rank": 4,
+              "dense_score": null,
+              "sparse_score": 6.57882972904787,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "bm25_rank": 3,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "fc539588792a89ff842cf241cf822de1:21",
+              "rank": 5,
+              "dense_score": 0.5697357204879272,
+              "sparse_score": null,
+              "fusion_score": 0.015873015873015872,
+              "rerank_score": null,
+              "retrieved_by": [],
+              "dense_rank": 3,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-028",
+          "recall_at_k": 1.0,
+          "precision_at_k": 0.4,
+          "mrr": 1.0,
+          "ndcg_at_k": 0.95583058934618,
+          "hit_rate": 1.0,
+          "retrieved": [
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:5",
+              "rank": 1,
+              "dense_score": 0.6194892743649159,
+              "sparse_score": 14.57448361269009,
+              "fusion_score": 0.03278688524590164,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:11",
+              "rank": 2,
+              "dense_score": 0.3820987517075487,
+              "sparse_score": 9.282430460840242,
+              "fusion_score": 0.03200204813108039,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 2,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:6",
+              "rank": 3,
+              "dense_score": 0.3272521726565035,
+              "sparse_score": 8.205677462952995,
+              "fusion_score": 0.03036576949620428,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 9,
+              "bm25_rank": 3,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:7",
+              "rank": 4,
+              "dense_score": 0.5562616259000854,
+              "sparse_score": 6.115501045223191,
+              "fusion_score": 0.029827662395050816,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 13,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:20",
+              "rank": 5,
+              "dense_score": 0.2951354733010806,
+              "sparse_score": 7.1339910507741555,
+              "fusion_score": 0.028258706467661692,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 15,
+              "bm25_rank": 7,
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-029",
+          "recall_at_k": 0.0,
+          "precision_at_k": 0.0,
+          "mrr": 0.0,
+          "ndcg_at_k": 0.0,
+          "hit_rate": 0.0,
+          "retrieved": [
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:2",
+              "rank": 1,
+              "dense_score": 0.7240310128343379,
+              "sparse_score": 11.584794464011111,
+              "fusion_score": 0.032018442622950824,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 1,
+              "bm25_rank": 4,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:20",
+              "rank": 2,
+              "dense_score": 0.6434863833547151,
+              "sparse_score": 11.944636561642927,
+              "fusion_score": 0.03200204813108039,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 2,
+              "bm25_rank": 3,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:24",
+              "rank": 3,
+              "dense_score": 0.6314355035473892,
+              "sparse_score": 10.93647176105495,
+              "fusion_score": 0.03125763125763126,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 3,
+              "bm25_rank": 5,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:30",
+              "rank": 4,
+              "dense_score": 0.5687116363628095,
+              "sparse_score": 13.58628589469859,
+              "fusion_score": 0.03021353930031804,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 11,
+              "bm25_rank": 2,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "d294281a5769e0a3d1455fbf637ee572:18",
+              "rank": 5,
+              "dense_score": null,
+              "sparse_score": 13.686275413449158,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "bm25_rank": 1,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "hybrid_rank": 5
+            }
+          ]
+        },
+        {
+          "id": "retrieval-030",
+          "recall_at_k": 0.0,
+          "precision_at_k": 0.0,
+          "mrr": 0.0,
+          "ndcg_at_k": 0.0,
+          "hit_rate": 0.0,
+          "retrieved": [
+            {
+              "doc_id": "a29a4ba5a539a2a462def8f91eb98ccc:3",
+              "rank": 1,
+              "dense_score": 0.4668311552754867,
+              "sparse_score": 13.937593300066068,
+              "fusion_score": 0.030679156908665108,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 10,
+              "bm25_rank": 1,
+              "hybrid_rank": 1
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:0",
+              "rank": 2,
+              "dense_score": 0.44778524731450464,
+              "sparse_score": 13.82872862115601,
+              "fusion_score": 0.02928692699490662,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 16,
+              "bm25_rank": 2,
+              "hybrid_rank": 2
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:14",
+              "rank": 3,
+              "dense_score": 0.47321577062215947,
+              "sparse_score": 8.836133163426183,
+              "fusion_score": 0.029211087420042643,
+              "rerank_score": null,
+              "retrieved_by": [
+                "bm25"
+              ],
+              "dense_rank": 7,
+              "bm25_rank": 10,
+              "hybrid_rank": 3
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:75",
+              "rank": 4,
+              "dense_score": 0.5184913904322597,
+              "sparse_score": null,
+              "fusion_score": 0.01639344262295082,
+              "rerank_score": null,
+              "retrieved_by": [],
+              "dense_rank": 1,
+              "hybrid_rank": 4
+            },
+            {
+              "doc_id": "928c24dbdeeb1c0a109f5620c8bac429:86",
+              "rank": 5,
+              "dense_score": 0.49695987208034775,
+              "sparse_score": null,
+              "fusion_score": 0.016129032258064516,
+              "rerank_score": null,
+              "retrieved_by": [],
+              "dense_rank": 2,
+              "hybrid_rank": 5
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "reranker": null,
+  "baseline": null
+}

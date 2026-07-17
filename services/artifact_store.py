@@ -4,7 +4,7 @@ import json
 import os
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol
 from uuid import uuid4
 
 from safety.approval import utc_now_iso
@@ -20,6 +20,26 @@ class ArtifactRecord:
     payload: Dict[str, Any]
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
+
+
+class ArtifactStore(Protocol):
+    def save_artifact(
+        self,
+        request_id: str,
+        tenant_id: str,
+        artifact_type: str,
+        name: str,
+        payload: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ArtifactRecord: ...
+
+    def get_artifact(self, artifact_id: str) -> ArtifactRecord: ...
+
+    def list_artifacts(
+        self,
+        request_id: str,
+        tenant_id: Optional[str] = None,
+    ) -> List[ArtifactRecord]: ...
 
 
 class SQLiteArtifactStore:
@@ -50,6 +70,15 @@ class SQLiteArtifactStore:
                 "CREATE INDEX IF NOT EXISTS idx_artifacts_request "
                 "ON artifacts(request_id, tenant_id)"
             )
+            conn.execute(
+                "DELETE FROM artifacts WHERE rowid NOT IN ("
+                "SELECT MIN(rowid) FROM artifacts "
+                "GROUP BY tenant_id, request_id, artifact_type, name)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_idempotency "
+                "ON artifacts(tenant_id, request_id, artifact_type, name)"
+            )
 
     def save_artifact(
         self,
@@ -71,8 +100,8 @@ class SQLiteArtifactStore:
             created_at=utc_now_iso(),
         )
         with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO artifacts("
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO artifacts("
                 "artifact_id, request_id, tenant_id, artifact_type, name, "
                 "payload, metadata, created_at"
                 ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -87,6 +116,16 @@ class SQLiteArtifactStore:
                     record.created_at,
                 ),
             )
+            if cursor.rowcount == 0:
+                row = conn.execute(
+                    "SELECT artifact_id, request_id, tenant_id, artifact_type, name, "
+                    "payload, metadata, created_at FROM artifacts "
+                    "WHERE tenant_id = ? AND request_id = ? "
+                    "AND artifact_type = ? AND name = ?",
+                    (tenant_id, request_id, artifact_type, name),
+                ).fetchone()
+                if row is not None:
+                    return self._row_to_record(row)
         return record
 
     def get_artifact(self, artifact_id: str) -> ArtifactRecord:

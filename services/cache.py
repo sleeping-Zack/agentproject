@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import time
 from collections import OrderedDict
 from threading import RLock
@@ -234,6 +235,78 @@ class ToolCallCache:
         self._memory.set(self._key(tool_name, args), value, ttl=ttl)
 
 
+class RedisToolCallCache(ToolCallCache):
+    """Shared cache for JSON-serializable LangChain ToolMessage values."""
+
+    def __init__(
+        self,
+        redis_url: str = "redis://127.0.0.1:6379/0",
+        default_ttl: float = 60.0,
+        key_prefix: str = "agent:tool-cache",
+        name: str = "tool",
+        client=None,
+    ) -> None:
+        self.default_ttl = default_ttl
+        self.name = name
+        self.key_prefix = key_prefix.rstrip(":")
+        self._ttl_overrides: Dict[str, float] = {}
+        if client is None:
+            try:
+                import redis
+            except ImportError as exc:  # pragma: no cover - production dependency
+                raise RuntimeError(
+                    "Redis cache requires the 'production' dependency extra"
+                ) from exc
+            client = redis.Redis.from_url(redis_url, decode_responses=True)
+        self.client = client
+
+    def _redis_key(self, tool_name: str, args: Dict[str, Any]) -> str:
+        return f"{self.key_prefix}:{self._key(tool_name, args)}"
+
+    def get(self, tool_name: str, args: Dict[str, Any]) -> Optional[Any]:
+        try:
+            raw = self.client.get(self._redis_key(tool_name, args))
+            if raw is None:
+                _record_miss(self.name)
+                return None
+            payload = json.loads(raw)
+            from langchain_core.messages import ToolMessage
+
+            value = ToolMessage(**payload)
+            _record_hit(self.name)
+            return value
+        except Exception:
+            _record_miss(self.name)
+            return None
+
+    def set(self, tool_name: str, args: Dict[str, Any], value: Any) -> None:
+        try:
+            payload = value.model_dump(mode="json")
+            ttl = max(1, int(math.ceil(
+                self._ttl_overrides.get(tool_name, self.default_ttl)
+            )))
+            self.client.setex(
+                self._redis_key(tool_name, args),
+                ttl,
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            )
+        except Exception:
+            return
+
+
+def create_tool_call_cache():
+    backend = os.getenv("AGENT_CACHE_BACKEND", "memory").strip().lower()
+    if backend == "memory":
+        return ToolCallCache()
+    if backend == "redis":
+        return RedisToolCallCache(
+            redis_url=os.getenv("AGENT_REDIS_URL", "redis://127.0.0.1:6379/0"),
+            default_ttl=float(os.getenv("AGENT_TOOL_CACHE_TTL_SECONDS", "60")),
+            key_prefix=os.getenv("AGENT_TOOL_CACHE_KEY_PREFIX", "agent:tool-cache"),
+        )
+    raise ValueError(f"unsupported cache backend: {backend}")
+
+
 def emit_prefix_cache_hint(prompt_prefix_chars: int) -> None:
     """标记当前请求把固定 system prompt 放在前缀，便于豆包/通义命中 KV cache。
 
@@ -246,4 +319,4 @@ def emit_prefix_cache_hint(prompt_prefix_chars: int) -> None:
     )
 
 
-tool_call_cache = ToolCallCache()
+tool_call_cache = create_tool_call_cache()

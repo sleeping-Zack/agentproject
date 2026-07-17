@@ -6,6 +6,9 @@
 """
 from __future__ import annotations
 
+import json
+import math
+import os
 import queue
 import threading
 import time
@@ -186,15 +189,26 @@ class EventBus:
             # consume() 会在队列排空后通过 closed 标志结束。
             pass
 
-    def consume(self, request_id: str, timeout: float = 0.5):
+    def consume(
+        self,
+        request_id: str,
+        timeout: float = 0.5,
+        after_sequence: Optional[int] = None,
+    ):
         channel = self._get_channel(request_id)
-        try:
-            item = channel.events.get(timeout=timeout)
-        except queue.Empty:
-            return "closed" if channel.closed else None
-        if item is _SENTINEL:
-            return "closed"
-        return item
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                item = channel.events.get(timeout=remaining)
+            except queue.Empty:
+                return "closed" if channel.closed else None
+            if item is _SENTINEL:
+                return "closed"
+            if after_sequence is None or item.sequence > after_sequence:
+                return item
+            if time.monotonic() >= deadline:
+                return "closed" if channel.closed else None
 
     def replay(self, request_id: str, after_sequence: int = 0) -> List[AgentEvent]:
         channel = self._get_channel(request_id)
@@ -226,4 +240,262 @@ class EventBus:
             self._channels.pop(request_id, None)
 
 
-event_bus = EventBus()
+class RedisEventBus:
+    """Redis Streams implementation shared by all application instances."""
+
+    def __init__(
+        self,
+        redis_url: str = "redis://127.0.0.1:6379/0",
+        replay_size: int = 512,
+        retention_seconds: float = 300.0,
+        key_prefix: str = "agent:events",
+        client=None,
+    ) -> None:
+        if replay_size <= 0 or retention_seconds <= 0:
+            raise ValueError("replay size and retention must be positive")
+        if client is None:
+            try:
+                import redis
+            except ImportError as exc:  # pragma: no cover - production dependency
+                raise RuntimeError(
+                    "Redis EventBus requires the 'production' dependency extra"
+                ) from exc
+            client = redis.Redis.from_url(redis_url, decode_responses=True)
+        try:
+            from redis.exceptions import WatchError
+        except ImportError as exc:  # pragma: no cover - production dependency
+            raise RuntimeError(
+                "Redis EventBus requires the 'production' dependency extra"
+            ) from exc
+        self.client = client
+        self.replay_size = replay_size
+        self.retention_seconds = retention_seconds
+        self.key_prefix = key_prefix.rstrip(":")
+        self._watch_error = WatchError
+        self._consume_cursors: Dict[str, int] = {}
+        self._cursor_lock = threading.Lock()
+
+    @property
+    def _ttl(self) -> int:
+        return max(1, int(math.ceil(self.retention_seconds)))
+
+    def _keys(self, request_id: str) -> Dict[str, str]:
+        # The hash tag keeps every request-scoped key in one Redis Cluster slot.
+        base = f"{self.key_prefix}:{{{request_id}}}"
+        return {
+            "stream": base,
+            "identity": f"{base}:identity",
+            "sequence": f"{base}:sequence",
+            "closed": f"{base}:closed",
+            "cancelled": f"{base}:cancelled",
+        }
+
+    @staticmethod
+    def _text(value) -> Optional[str]:
+        if value is None:
+            return None
+        return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+    def open(
+        self,
+        request_id: str,
+        identity: Optional[Dict[str, str]] = None,
+    ) -> bool:
+        keys = self._keys(request_id)
+        normalized = dict(identity or {})
+        encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+        while True:
+            try:
+                with self.client.pipeline() as pipe:
+                    pipe.watch(keys["identity"])
+                    current = self._text(pipe.get(keys["identity"]))
+                    if current is None:
+                        pipe.multi()
+                        pipe.delete(
+                            keys["stream"],
+                            keys["sequence"],
+                            keys["closed"],
+                            keys["cancelled"],
+                        )
+                        pipe.set(keys["identity"], encoded, ex=self._ttl)
+                        pipe.execute()
+                        return True
+                    current_identity = json.loads(current)
+                    if current_identity != normalized:
+                        if current_identity or not normalized:
+                            raise EventStreamConflictError(
+                                f"request_id is already bound to another stream: {request_id}"
+                            )
+                        pipe.multi()
+                        pipe.set(keys["identity"], encoded, ex=self._ttl)
+                        pipe.execute()
+                        return False
+                    pipe.multi()
+                    for key in keys.values():
+                        pipe.expire(key, self._ttl)
+                    pipe.execute()
+                    return False
+            except self._watch_error:
+                continue
+
+    def exists(self, request_id: str) -> bool:
+        return bool(self.client.exists(self._keys(request_id)["identity"]))
+
+    def identity(self, request_id: str) -> Optional[Dict[str, str]]:
+        value = self._text(self.client.get(self._keys(request_id)["identity"]))
+        return None if value is None else dict(json.loads(value))
+
+    def publish(
+        self,
+        request_id: str,
+        event: str,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> AgentEvent:
+        if not self.exists(request_id):
+            self.open(request_id)
+        keys = self._keys(request_id)
+        timestamp = time.time()
+        payload = data or {}
+        while True:
+            try:
+                with self.client.pipeline() as pipe:
+                    pipe.watch(keys["sequence"], keys["closed"])
+                    if pipe.get(keys["closed"]):
+                        raise RuntimeError(f"event channel already closed: {request_id}")
+                    current = self._text(pipe.get(keys["sequence"]))
+                    sequence = int(current or 0) + 1
+                    fields = {
+                        "request_id": request_id,
+                        "event_type": event,
+                        "sequence": str(sequence),
+                        "timestamp": repr(timestamp),
+                        "payload": json.dumps(
+                            payload,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    }
+                    pipe.multi()
+                    pipe.set(keys["sequence"], sequence, ex=self._ttl)
+                    pipe.xadd(
+                        keys["stream"],
+                        fields,
+                        id=f"{sequence}-0",
+                        maxlen=self.replay_size,
+                        approximate=False,
+                    )
+                    pipe.expire(keys["stream"], self._ttl)
+                    pipe.expire(keys["identity"], self._ttl)
+                    pipe.expire(keys["closed"], self._ttl)
+                    pipe.expire(keys["cancelled"], self._ttl)
+                    pipe.execute()
+                    return AgentEvent(request_id, event, sequence, timestamp, payload)
+            except self._watch_error:
+                continue
+
+    def close(self, request_id: str) -> None:
+        if not self.exists(request_id):
+            self.open(request_id)
+        keys = self._keys(request_id)
+        with self.client.pipeline(transaction=True) as pipe:
+            pipe.set(keys["closed"], "1", ex=self._ttl)
+            pipe.expire(keys["identity"], self._ttl)
+            pipe.expire(keys["stream"], self._ttl)
+            pipe.expire(keys["sequence"], self._ttl)
+            pipe.expire(keys["cancelled"], self._ttl)
+            pipe.execute()
+
+    def consume(
+        self,
+        request_id: str,
+        timeout: float = 0.5,
+        after_sequence: Optional[int] = None,
+    ):
+        keys = self._keys(request_id)
+        if after_sequence is None:
+            with self._cursor_lock:
+                cursor = self._consume_cursors.get(request_id, 0)
+        else:
+            cursor = after_sequence
+        block_ms = max(1, int(timeout * 1000))
+        response = self.client.xread(
+            {keys["stream"]: f"{cursor}-0"},
+            count=1,
+            block=block_ms,
+        )
+        if response:
+            _, entries = response[0]
+            if entries:
+                item = self._event_from_entry(request_id, entries[0][1])
+                if after_sequence is None:
+                    with self._cursor_lock:
+                        self._consume_cursors[request_id] = item.sequence
+                return item
+        return "closed" if self.is_closed(request_id) else None
+
+    def replay(self, request_id: str, after_sequence: int = 0) -> List[AgentEvent]:
+        entries = self.client.xrange(
+            self._keys(request_id)["stream"],
+            min=f"({after_sequence}-0",
+            max="+",
+            count=self.replay_size,
+        )
+        return [self._event_from_entry(request_id, fields) for _, fields in entries]
+
+    def cancel(self, request_id: str) -> None:
+        if not self.exists(request_id):
+            self.open(request_id)
+        keys = self._keys(request_id)
+        with self.client.pipeline(transaction=True) as pipe:
+            pipe.set(keys["cancelled"], "1", ex=self._ttl)
+            pipe.expire(keys["identity"], self._ttl)
+            pipe.expire(keys["stream"], self._ttl)
+            pipe.expire(keys["sequence"], self._ttl)
+            pipe.expire(keys["closed"], self._ttl)
+            pipe.execute()
+
+    def is_cancelled(self, request_id: str) -> bool:
+        return bool(self.client.get(self._keys(request_id)["cancelled"]))
+
+    def is_closed(self, request_id: str) -> bool:
+        return bool(self.client.get(self._keys(request_id)["closed"]))
+
+    def discard(self, request_id: str) -> None:
+        keys = self._keys(request_id)
+        self.client.delete(*keys.values())
+        with self._cursor_lock:
+            self._consume_cursors.pop(request_id, None)
+
+    def _event_from_entry(self, request_id: str, fields) -> AgentEvent:
+        normalized = {
+            self._text(key): self._text(value)
+            for key, value in fields.items()
+        }
+        return AgentEvent(
+            request_id=normalized.get("request_id") or request_id,
+            event_type=normalized["event_type"],
+            sequence=int(normalized["sequence"]),
+            timestamp=float(normalized["timestamp"]),
+            payload=json.loads(normalized.get("payload") or "{}"),
+        )
+
+
+def create_event_bus():
+    backend = os.getenv("AGENT_EVENT_BUS_BACKEND", "memory").strip().lower()
+    if backend == "memory":
+        return EventBus(
+            queue_size=int(os.getenv("AGENT_EVENT_QUEUE_SIZE", "256")),
+            replay_size=int(os.getenv("AGENT_EVENT_REPLAY_SIZE", "512")),
+            retention_seconds=float(os.getenv("AGENT_EVENT_RETENTION_SECONDS", "300")),
+        )
+    if backend == "redis":
+        return RedisEventBus(
+            redis_url=os.getenv("AGENT_REDIS_URL", "redis://127.0.0.1:6379/0"),
+            replay_size=int(os.getenv("AGENT_EVENT_REPLAY_SIZE", "512")),
+            retention_seconds=float(os.getenv("AGENT_EVENT_RETENTION_SECONDS", "300")),
+            key_prefix=os.getenv("AGENT_EVENT_KEY_PREFIX", "agent:events"),
+        )
+    raise ValueError(f"unsupported event bus backend: {backend}")
+
+
+event_bus = create_event_bus()

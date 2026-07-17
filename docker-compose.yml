@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agent
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  jaeger:
+    image: jaegertracing/jaeger:2.19.0
+    ports:
+      - "16686:16686"
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.156.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "13133:13133"
+    depends_on:
+      - jaeger
+
+  app:
+    build: .
+    environment:
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      AGENT_API_KEY: ${AGENT_API_KEY:-dev-api-key}
+      AGENT_ENV: production
+      AGENT_STORAGE_BACKEND: postgres
+      AGENT_APPROVAL_BACKEND: postgres
+      AGENT_ARTIFACT_BACKEND: postgres
+      AGENT_DATABASE_URL: postgresql://agent:agent@postgres:5432/agent
+      AGENT_EVENT_BUS_BACKEND: redis
+      AGENT_RATE_LIMIT_BACKEND: redis
+      AGENT_CACHE_BACKEND: redis
+      AGENT_REDIS_URL: redis://redis:6379/0
+      AGENT_OTEL_ENABLED: "true"
+      OTEL_SERVICE_NAME: sweeper-agent
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+volumes:
+  postgres-data:
+  redis-data:

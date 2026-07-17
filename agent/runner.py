@@ -16,8 +16,9 @@ from agent.verifier import AnswerVerifier, VerifyResult, build_default_answer_ve
 from observability.event_bus import EventBackpressureError, event_bus
 from observability.tracing import trace_recorder
 from safety.security import UnsafeInputError, assert_safe_user_input
-from services.approval_store import SQLiteApprovalStore
-from services.artifact_store import SQLiteArtifactStore
+from services.approval_store import ApprovalStore
+from services.artifact_store import ArtifactStore
+from services.factories import create_approval_store, create_artifact_store
 from utils.streaming import get_final_response
 
 
@@ -156,8 +157,8 @@ class AgentRunner:
         self,
         backend: Optional[Callable[[AgentTask, AgentState], AgentBackendResult]] = None,
         policy: Optional[ToolPolicy] = None,
-        approval_store: Optional[SQLiteApprovalStore] = None,
-        artifact_store: Optional[SQLiteArtifactStore] = None,
+        approval_store: Optional[ApprovalStore] = None,
+        artifact_store: Optional[ArtifactStore] = None,
         conversation_memory: Optional[ConversationMemory] = None,
         verifier: Optional[AnswerVerifier] = None,
         max_steps: int = 8,
@@ -173,8 +174,8 @@ class AgentRunner:
     ) -> None:
         self.backend = backend or ReactAgentBackend()
         self.policy = policy or ToolPolicy()
-        self.approval_store = approval_store or SQLiteApprovalStore()
-        self.artifact_store = artifact_store or SQLiteArtifactStore()
+        self.approval_store = approval_store or create_approval_store()
+        self.artifact_store = artifact_store or create_artifact_store()
         self.conversation_memory = conversation_memory
         self.verifier = verifier or build_default_answer_verifier()
         self.max_steps = max_steps
@@ -506,6 +507,7 @@ class AgentRunner:
                     event_bus.consume,
                     request_id,
                     poll_timeout,
+                    cursor,
                 )
                 if item == "closed":
                     break

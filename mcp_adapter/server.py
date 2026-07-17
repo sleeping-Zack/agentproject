@@ -5,7 +5,7 @@ from agent.policies import PolicyAction, ToolPolicy
 from agent.tools.registry import build_default_tool_registry
 from safety.auth import AuthContext
 from safety.security import sensitive_tool_approval
-from services.approval_store import SQLiteApprovalStore
+from services.approval_store import ApprovalStore
 
 
 class MCPToolServer:
@@ -19,7 +19,7 @@ class MCPToolServer:
         self,
         tool_handlers: Dict[str, Callable[[Dict], str]],
         policy: Optional[ToolPolicy] = None,
-        approval_store: Optional[SQLiteApprovalStore] = None,
+        approval_store: Optional[ApprovalStore] = None,
     ) -> None:
         self.tool_handlers = tool_handlers
         self.registry = build_default_tool_registry(tool_handlers.keys())

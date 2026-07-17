@@ -20,27 +20,31 @@ from agent.tools.agent_tools import (
 from mcp_adapter.server import MCPToolServer
 from observability.event_bus import AgentEvent, EventStreamConflictError, event_bus
 from observability.metrics import metrics_registry
-from observability.tracing import trace_recorder
+from observability.otel import configure_telemetry
+from observability.tracing import otel_spans_from_trace_payload, trace_recorder
 from rag.judge import LLMJudge, evaluate_batch
 from safety.auth import ADMIN_ROLES, AuthContext, resolve_auth_context
 from safety.security import UnsafeInputError, assert_safe_user_input
-from services.approval_store import SQLiteApprovalStore
-from services.artifact_store import SQLiteArtifactStore
-from services.persistence import SQLiteStore
-from services.rate_limit import RateLimiter
+from services.factories import (
+    create_approval_store,
+    create_artifact_store,
+    create_session_store,
+)
+from services.rate_limit import create_rate_limiter
 
 app = FastAPI(title="Sweeper Agent API", version="0.4.0")
-store = SQLiteStore(os.getenv("AGENT_DB_PATH", "storage/agent.db"))
+configure_telemetry(app)
+store = create_session_store()
 agent = ReactAgent(session_store=store)
-approval_store = SQLiteApprovalStore(os.getenv("AGENT_APPROVAL_DB_PATH", "storage/approvals.db"))
-artifact_store = SQLiteArtifactStore(os.getenv("AGENT_ARTIFACT_DB_PATH", "storage/artifacts.db"))
+approval_store = create_approval_store()
+artifact_store = create_artifact_store()
 harness_runner = AgentRunner(
     backend=ReactAgentBackend(agent=agent),
     approval_store=approval_store,
     artifact_store=artifact_store,
     conversation_memory=agent.memory,
 )
-rate_limiter = RateLimiter(
+rate_limiter = create_rate_limiter(
     max_requests=int(os.getenv("AGENT_RATE_LIMIT_REQUESTS", "60")),
     window_seconds=int(os.getenv("AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")),
 )
@@ -578,8 +582,12 @@ async def get_trace(request_id: str) -> Dict:
 async def get_otel_trace(request_id: str) -> Dict:
     try:
         return {"spans": trace_recorder.export_otel_spans(request_id)}
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="trace not found") from exc
+    except KeyError:
+        try:
+            trace_payload = store.get_trace(request_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="trace not found") from exc
+        return {"spans": otel_spans_from_trace_payload(trace_payload)}
 
 
 @app.post("/mcp")

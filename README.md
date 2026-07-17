@@ -838,11 +838,31 @@ docker run --env-file .env -p 8000:8000 sweeper-agent
 
 ---
 
-## 24. 当前边界与后续演进
+## 24. 多实例部署
 
-- 当前存储使用 SQLite，适合本地演示和轻量部署；生产环境建议迁移到 Postgres / MySQL，并把缓存、限流和审批短期状态接 Redis。
-- `/chat/stream` 已统一模型 token 与 Harness 状态事件；当前 EventBus 是单进程实现，多实例部署应替换为 Redis Streams、NATS 或 Kafka，并共享 replay 状态。
-- 审批目前以工具级和场景级控制为主；后续可下沉到真实 user_id / month / 参数级审批，并增加审批过期、一次性消费和审批范围校验。
-- Budget 已在调用前预留模型 token/cost 与工具次数，并让 Planner 子任务共享总预算；真实结算精度仍取决于模型 provider 的 usage 元数据。
-- ToolPolicy 已由版本化 YAML 按租户、角色、场景和参数约束加载；大规模生产环境可继续迁移到集中式 RBAC/ABAC 策略服务。
-- Trace 当前是内存 + SQLite payload；生产环境可接 OpenTelemetry Collector、Jaeger、Tempo 或日志平台。
+多实例演进已经落地，同时保留本地轻量模式：
+
+- 持久化通过 `AGENT_STORAGE_BACKEND` 切换 SQLite / Postgres；session、trace、approval 和 artifact 在 Postgres 中由所有实例共享。
+- approval 与 artifact 按 request 维度幂等；审批状态只允许从 `pending` 原子转换一次，避免两个实例同时覆盖审批结果。
+- `AGENT_EVENT_BUS_BACKEND=redis` 启用 Redis Streams，跨实例共享生产者归属、严格递增序号、SSE replay、关闭和取消状态。
+- 限流和工具调用缓存可分别通过 `AGENT_RATE_LIMIT_BACKEND=redis` 与 `AGENT_CACHE_BACKEND=redis` 共享。
+- `AGENT_OTEL_ENABLED=true` 启用 OpenTelemetry SDK、FastAPI 自动埋点与 OTLP HTTP 导出；本地 trace payload 和 `/traces/{request_id}/otel` 保持兼容。
+
+完整生产拓扑可直接启动：
+
+```powershell
+docker compose up --build
+```
+
+服务地址：API `http://127.0.0.1:8000`，Jaeger UI `http://127.0.0.1:16686`。Compose 同时启动 Postgres、Redis、OpenTelemetry Collector 和 Jaeger，配置见 `docker-compose.yml` 与 `deploy/otel-collector.yaml`。
+
+仅运行分布式后端集成测试时：
+
+```powershell
+docker compose up -d postgres redis
+$env:AGENT_TEST_POSTGRES_URL="postgresql://agent:agent@127.0.0.1:5432/agent"
+$env:AGENT_TEST_REDIS_URL="redis://127.0.0.1:6379/0"
+pytest tests/test_distributed_backends.py -q
+```
+
+仍需根据实际业务继续下沉的边界包括审批过期与一次性消费、集中式 RBAC/ABAC、数据库备份恢复和生产级 Jaeger/Tempo 持久化存储。当前 Compose 中的 Jaeger 使用内存存储，只适合本地验证链路。

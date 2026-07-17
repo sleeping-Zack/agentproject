@@ -34,14 +34,13 @@ from observability.event_bus import EventBackpressureError, event_bus
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
 from safety.security import UnsafeInputError, assert_safe_user_input
-from services.persistence import SQLiteStore
+from services.factories import create_session_store
 from utils.prompt_loader import load_system_prompts
 
 
-def _default_session_store() -> Optional[SQLiteStore]:
-    db_path = os.getenv("AGENT_DB_PATH", "storage/agent.db")
+def _default_session_store():
     try:
-        return SQLiteStore(db_path)
+        return create_session_store()
     except Exception:
         return None
 

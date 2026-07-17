@@ -78,6 +78,10 @@ class ConversationMemory:
         self._lock = RLock()
 
     def _load_into_cache(self, session_id: str) -> List[Dict[str, str]]:
+        if getattr(self.store, "shared", False):
+            history = self.store.load_messages(session_id)
+            self._cache[session_id] = history
+            return history
         if session_id in self._cache:
             return self._cache[session_id]
         history = self.store.load_messages(session_id)

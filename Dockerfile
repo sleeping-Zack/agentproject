@@ -10,6 +10,8 @@ COPY agent ./agent
 COPY api ./api
 COPY config ./config
 COPY data ./data
+COPY mcp_adapter ./mcp_adapter
+COPY mcp_server.py ./
 COPY model ./model
 COPY observability ./observability
 COPY prompts ./prompts
@@ -18,7 +20,7 @@ COPY safety ./safety
 COPY services ./services
 COPY utils ./utils
 
-RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .
+RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir ".[production]"
 
 EXPOSE 8000
 

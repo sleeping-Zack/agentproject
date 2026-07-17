@@ -42,6 +42,22 @@ def test_conversation_memory_persists_to_external_store():
     ]
 
 
+def test_shared_store_refreshes_history_written_by_another_instance():
+    class SharedStore(InMemorySessionStore):
+        shared = True
+
+    store = SharedStore()
+    first = ConversationMemory(store=store)
+    second = ConversationMemory(store=store)
+
+    assert first.get_messages("s1") == []
+    second.add_message("s1", "user", "written elsewhere")
+
+    assert first.get_messages("s1") == [
+        {"role": "user", "content": "written elsewhere"}
+    ]
+
+
 def test_conversation_memory_compresses_with_summarizer():
     store = InMemorySessionStore()
 

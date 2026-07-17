@@ -1,4 +1,4 @@
-from observability.tracing import TraceRecorder
+from observability.tracing import TraceRecorder, otel_spans_from_trace_payload
 
 
 def test_trace_recorder_exports_tool_span_with_redaction():
@@ -30,3 +30,16 @@ def test_trace_recorder_exports_opentelemetry_style_spans():
     assert spans[0]["trace_id"] == "req-otel"
     assert spans[0]["name"] == "model.qwen"
     assert spans[0]["attributes"]["tokens"] == 12
+
+
+def test_otel_span_export_can_use_persisted_trace_payload():
+    recorder = TraceRecorder()
+    recorder.start_trace(request_id="req-persisted", session_id="session-1")
+    with recorder.span("req-persisted", "tool", "first"):
+        pass
+    with recorder.span("req-persisted", "model", "second"):
+        pass
+
+    spans = otel_spans_from_trace_payload(recorder.export_trace("req-persisted"))
+
+    assert [span["name"] for span in spans] == ["tool.first", "model.second"]

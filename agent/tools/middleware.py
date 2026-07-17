@@ -28,15 +28,13 @@ from observability.tracing import trace_recorder
 from observability.metrics import metrics_registry
 from services.cache import tool_call_cache
 from services.circuit_breaker import CircuitOpenError, breaker_registry
-from services.approval_store import SQLiteApprovalStore
+from services.factories import create_approval_store
 from safety.security import args_hash, redact_sensitive, sensitive_tool_approval
 
 
 tool_registry = build_default_tool_registry(agent_conf.get("allowed_tools", []))
 tool_policy = ToolPolicy(tool_registry=tool_registry)
-approval_store = SQLiteApprovalStore(
-    os.getenv("AGENT_APPROVAL_DB_PATH", "storage/approvals.db")
-)
+approval_store = create_approval_store()
 default_retry_policy = RetryPolicy(
     max_attempts=int(agent_conf.get("tool_retry_max_attempts", 3)),
     base_delay=float(agent_conf.get("tool_retry_base_delay", 0.2)),

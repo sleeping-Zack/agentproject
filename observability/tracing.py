@@ -3,6 +3,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from observability.otel import (
+    emit_completed_otel_span,
+    mark_otel_error,
+    start_otel_span,
+)
 from safety.security import redact_sensitive
 
 
@@ -48,14 +53,22 @@ class TraceRecorder:
         trace = self._traces[request_id]
         event = TraceEvent(category=category, name=name, started_at=time.time(), metadata=metadata or {})
         start = time.perf_counter()
-        try:
-            yield event
-        except Exception as exc:
-            event.error = str(exc)
-            raise
-        finally:
-            event.duration_ms = round((time.perf_counter() - start) * 1000, 3)
-            trace.events.append(event)
+        attributes = {
+            "agent.request_id": request_id,
+            "agent.session_id": trace.session_id,
+            "agent.category": category,
+            **redact_sensitive(event.metadata),
+        }
+        with start_otel_span(f"{category}.{name}", attributes) as otel_span:
+            try:
+                yield event
+            except Exception as exc:
+                event.error = str(exc)
+                mark_otel_error(otel_span, exc)
+                raise
+            finally:
+                event.duration_ms = round((time.perf_counter() - start) * 1000, 3)
+                trace.events.append(event)
 
     def export_trace(self, request_id: str) -> Dict:
         trace = self._traces[request_id]
@@ -112,24 +125,45 @@ class TraceRecorder:
             error=failure_reason if status == "failed" else None,
         )
         trace.events.append(event)
+        emit_completed_otel_span(
+            name=f"diagnostic.{event_type}",
+            started_at=event.started_at,
+            duration_ms=event.duration_ms,
+            attributes={
+                "agent.request_id": request_id,
+                "agent.session_id": trace.session_id,
+                "agent.category": "diagnostic",
+                **redact_sensitive(event.metadata),
+            },
+            error=event.error,
+        )
         return event
 
     def export_otel_spans(self, request_id: str) -> List[Dict]:
-        trace = self._traces[request_id]
-        spans = []
-        for index, event in enumerate(trace.events):
-            spans.append(
-                {
-                    "trace_id": trace.request_id,
-                    "span_id": f"{index + 1:016x}",
-                    "name": f"{event.category}.{event.name}",
-                    "start_time_unix_nano": int(event.started_at * 1_000_000_000),
-                    "duration_ms": event.duration_ms,
-                    "attributes": redact_sensitive(event.metadata),
-                    "status": {"code": "ERROR" if event.error else "OK", "message": event.error or ""},
-                }
-            )
-        return spans
+        return otel_spans_from_trace_payload(self.export_trace(request_id))
+
+
+def otel_spans_from_trace_payload(trace: Dict) -> List[Dict]:
+    request_id = trace["request_id"]
+    events = trace.get("events", [])
+    spans = []
+    for index, event in enumerate(events):
+        error = event.get("error")
+        spans.append(
+            {
+                "trace_id": request_id,
+                "span_id": f"{index + 1:016x}",
+                "name": f"{event['category']}.{event['name']}",
+                "start_time_unix_nano": int(event["started_at"] * 1_000_000_000),
+                "duration_ms": event.get("duration_ms", 0),
+                "attributes": redact_sensitive(event.get("metadata", {})),
+                "status": {
+                    "code": "ERROR" if error else "OK",
+                    "message": error or "",
+                },
+            }
+        )
+    return spans
 
 
 trace_recorder = TraceRecorder()

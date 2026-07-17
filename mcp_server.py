@@ -7,7 +7,7 @@ from agent.policies import ToolPolicy
 from agent.tools.registry import build_default_tool_registry
 from mcp_adapter.server import MCPToolServer
 from safety.auth import AuthContext
-from services.approval_store import SQLiteApprovalStore
+from services.factories import create_approval_store
 from utils.config_handler import agent_conf
 
 
@@ -22,7 +22,7 @@ def build_server() -> MCPToolServer:
             ),
         },
         policy=ToolPolicy(registry),
-        approval_store=SQLiteApprovalStore(),
+        approval_store=create_approval_store(),
     )
 
 

@@ -32,6 +32,8 @@ md5.text
 /tmp_answer.txt
 /tmp_response.json
 /reports/
+/outputs/
+/storage/experiments/
 
 # Build artifacts
 dist/

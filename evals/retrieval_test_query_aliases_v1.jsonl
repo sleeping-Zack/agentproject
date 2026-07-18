@@ -1,0 +1,8 @@
+{"query":"主刷缠绕毛发怎么办","locked_test_id":"retrieval-001","reason":"滚刷与主刷为同一故障意图"}
+{"query":"扫拖机器人漏水怎么处理","locked_test_id":"retrieval-028","reason":"与水箱加水后漏水为同一故障意图"}
+{"query":"机器人无法连接 WiFi 怎么办","locked_test_id":"retrieval-004","reason":"与 APP 无法连接机器人为同一连接故障意图"}
+{"query":"每日使用后需要保养哪些部件","locked_test_id":"retrieval-012","reason":"每日与每次使用后的保养意图相同"}
+{"query":"机器人尘盒多久清理一次","locked_test_id":"retrieval-007","reason":"尘盒清理周期意图相同"}
+{"query":"HEPA 滤网怎么维护","locked_test_id":"retrieval-003","reason":"覆盖同一 HEPA 滤网维护答案域"}
+{"query":"机器人自动回充失败怎么办","locked_test_id":"retrieval-010","reason":"与找不到充电座为同一回充故障意图"}
+{"query":"门槛高应该选什么越障能力","locked_test_id":"retrieval-005","reason":"与最大越障门槛为同一能力约束意图"}

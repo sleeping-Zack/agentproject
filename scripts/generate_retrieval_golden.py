@@ -7,6 +7,7 @@ reviewer; answer keywords are never used to filter or label candidates.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import queue
@@ -20,9 +21,17 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 DEFAULT_INPUT = "evals/rag_golden.jsonl"
 DEFAULT_MANIFEST = "evals/retrieval_manifest_v1.json"
 DEFAULT_OUTPUT = "evals/annotations/retrieval_candidates_v1.jsonl"
+DEFAULT_LOCKED_GOLDEN = "evals/retrieval_golden.jsonl"
+DEFAULT_LOCKED_QUERY_ALIASES = "evals/retrieval_test_query_aliases_v1.jsonl"
 ROUTE_ORDER = ("dense", "bm25", "hybrid")
 RANK_FIELDS = ("dense_rank", "bm25_rank", "hybrid_rank", "rerank_rank")
-SCORE_FIELDS = ("dense_score", "sparse_score", "fusion_score", "rerank_score")
+SCORE_FIELDS = (
+    "dense_score",
+    "sparse_score",
+    "fusion_score",
+    "rerank_score",
+    "ranking_score",
+)
 
 
 class CandidatePipelineError(RuntimeError):
@@ -75,6 +84,12 @@ class RetrievalRuntime:
     reranker: Any = None
     rrf_k: int = 60
     rerank_top_n: int = 20
+    rerank_strategy: str = "replace"
+    rerank_hybrid_weight: float = 0.7
+    rerank_model_weight: float = 0.3
+    rerank_fusion_k: int = 10
+    rerank_bypass_exact_queries: bool = False
+    fusion_anchor_k: Optional[int] = None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -108,18 +123,57 @@ def load_cases(path: Path) -> List[Dict[str, Any]]:
             if not isinstance(row, dict):
                 raise ValueError(f"case at {path}:{line_number} must be an object")
             query = row.get("query")
+            if not isinstance(query, str) or not query.strip():
+                raise ValueError(f"case at {path}:{line_number} has no query")
+            query = query.strip()
             case_id = row.get("id") or row.get("case_id")
             if not isinstance(case_id, str) or not case_id.strip():
-                raise ValueError(f"case at {path}:{line_number} has no id")
-            if not isinstance(query, str) or not query.strip():
-                raise ValueError(f"case {case_id} has no query")
+                digest = hashlib.sha256(normalize_query(query).encode("utf-8")).hexdigest()[:12]
+                case_id = f"rag-{digest}"
+            else:
+                case_id = case_id.strip()
             if case_id in seen_ids:
                 raise ValueError(f"duplicate case id: {case_id}")
             seen_ids.add(case_id)
-            cases.append({**row, "id": case_id, "query": query.strip()})
+            cases.append({**row, "id": case_id, "query": query})
     if not cases:
         raise ValueError("input must contain at least one case")
     return cases
+
+
+def normalize_query(query: str) -> str:
+    return " ".join(query.casefold().split())
+
+
+def exclude_locked_queries(
+    cases: Sequence[Mapping[str, Any]],
+    locked_cases: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Remove any query already present in a frozen test set."""
+    locked_queries = {normalize_query(str(case["query"])) for case in locked_cases}
+    return [
+        dict(case)
+        for case in cases
+        if normalize_query(str(case["query"])) not in locked_queries
+    ]
+
+
+def validate_locked_query_aliases(
+    aliases: Sequence[Mapping[str, Any]],
+    locked_cases: Sequence[Mapping[str, Any]],
+) -> None:
+    locked_ids = {str(case["id"]) for case in locked_cases}
+    seen_queries = set()
+    for alias in aliases:
+        query = normalize_query(str(alias["query"]))
+        if query in seen_queries:
+            raise ValueError(f"duplicate locked query alias: {alias['query']}")
+        seen_queries.add(query)
+        locked_test_id = alias.get("locked_test_id")
+        if locked_test_id not in locked_ids:
+            raise ValueError(f"query alias references unknown locked test id: {locked_test_id}")
+        if not isinstance(alias.get("reason"), str) or not alias["reason"].strip():
+            raise ValueError(f"query alias {alias['query']!r} has no audit reason")
 
 
 def _json_safe(value: Any) -> Any:
@@ -132,6 +186,19 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_json_safe(item) for item in value]
     return str(value)
+
+
+def _portable_metadata(value: Any) -> Dict[str, Any]:
+    metadata = _json_safe(value or {})
+    if not isinstance(metadata, dict):
+        raise ValueError("candidate metadata must be an object")
+    metadata.pop("source_path", None)
+    source_name = metadata.get("source_name")
+    if isinstance(source_name, str) and source_name.strip():
+        metadata["source"] = source_name.strip()
+    elif isinstance(metadata.get("source"), str):
+        metadata["source"] = metadata["source"].replace("\\", "/").rsplit("/", 1)[-1]
+    return metadata
 
 
 def _stable_candidate_id(candidate: Any) -> str:
@@ -179,9 +246,7 @@ def _candidate_payload(
     document = getattr(candidate, "document", None)
     if document is None:
         raise ValueError("retrieval candidate has no document")
-    metadata = _json_safe(getattr(document, "metadata", None) or {})
-    if not isinstance(metadata, dict):
-        raise ValueError("candidate metadata must be an object")
+    metadata = _portable_metadata(getattr(document, "metadata", None))
     actual_chunk_version = metadata.get("chunk_version")
     if actual_chunk_version and str(actual_chunk_version) != versions.chunk_version:
         raise ValueError("candidate chunk_version does not match retrieval manifest")
@@ -210,6 +275,11 @@ def _candidate_payload(
         "fusion_score": _finite_score(getattr(candidate, "fusion_score", None)),
         "rerank_rank": _positive_rank(meta.get("rerank_rank")),
         "rerank_score": _finite_score(getattr(candidate, "rerank_score", None)),
+        "ranking_score": _finite_score(getattr(candidate, "ranking_score", None)),
+        "ranking_strategy": meta.get("ranking_strategy"),
+        "rerank_applied": bool(meta.get("rerank_applied", False)),
+        "rerank_evaluated": bool(meta.get("rerank_evaluated", False)),
+        "rerank_reason": meta.get("rerank_reason"),
         "corpus_version": versions.corpus_version,
         "corpus_hash": versions.corpus_hash,
         "chunk_version": versions.chunk_version,
@@ -264,6 +334,14 @@ def merge_route_candidates(
             for field in SCORE_FIELDS:
                 if current[field] is None and incoming[field] is not None:
                     current[field] = incoming[field]
+            for field in (
+                "ranking_strategy",
+                "rerank_applied",
+                "rerank_evaluated",
+                "rerank_reason",
+            ):
+                if incoming.get(field) not in (None, False):
+                    current[field] = incoming[field]
             for key, value in incoming["metadata"].items():
                 current["metadata"].setdefault(key, value)
             if current["source"] == "unknown" and incoming["source"] != "unknown":
@@ -292,18 +370,28 @@ def retrieve_candidate_pool(
         raise RuntimeError("BM25 retriever is not ready")
     bm25_candidates = list(runtime.bm25.retrieve(query, k=top_k))
 
-    from rag.retrievers.hybrid_retriever import fuse_rrf
+    from rag.retrievers.hybrid_retriever import (
+        fuse_rrf_with_anchor,
+        rerank_fused_candidates,
+    )
 
-    hybrid_candidates = fuse_rrf([dense_candidates, bm25_candidates], k=runtime.rrf_k)
+    hybrid_candidates = fuse_rrf_with_anchor(
+        [dense_candidates, bm25_candidates],
+        k=runtime.rrf_k,
+        anchor_k=runtime.fusion_anchor_k,
+    )
     if runtime.reranker is not None and hybrid_candidates:
-        head_size = min(max(runtime.rerank_top_n, top_k), len(hybrid_candidates))
-        head = hybrid_candidates[:head_size]
-        reranked = list(runtime.reranker.rerank(query, list(head), top_n=len(head)))
-        reranked_ids = {_stable_candidate_id(candidate) for candidate in reranked}
-        reranked.extend(candidate for candidate in head if _stable_candidate_id(candidate) not in reranked_ids)
-        for rank, candidate in enumerate(reranked, start=1):
-            candidate.meta["rerank_rank"] = rank
-        hybrid_candidates = reranked + hybrid_candidates[head_size:]
+        hybrid_candidates = rerank_fused_candidates(
+            query,
+            hybrid_candidates,
+            reranker=runtime.reranker,
+            rerank_top_n=max(runtime.rerank_top_n, top_k),
+            strategy=runtime.rerank_strategy,
+            hybrid_weight=runtime.rerank_hybrid_weight,
+            rerank_weight=runtime.rerank_model_weight,
+            fusion_k=runtime.rerank_fusion_k,
+            bypass_exact_queries=runtime.rerank_bypass_exact_queries,
+        )
 
     return merge_route_candidates(
         {
@@ -371,7 +459,10 @@ def generate_candidate_file(
     versions: VersionInfo,
     timeout_seconds: float,
     resume: bool = False,
+    split: str = "dev",
 ) -> Dict[str, int]:
+    if split != "dev":
+        raise ValueError("candidate generation is restricted to the dev split")
     completed = _completed_case_ids(output_path) if resume else set()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     mode = "a" if resume else "w"
@@ -399,6 +490,7 @@ def generate_candidate_file(
                 "schema_version": 1,
                 "case_id": case_id,
                 "query": case["query"],
+                "split": split,
                 "review_status": "pending",
                 "corpus_version": versions.corpus_version,
                 "corpus_hash": versions.corpus_hash,
@@ -426,19 +518,23 @@ def build_runtime() -> RetrievalRuntime:
         raise RuntimeError("BM25 retriever is not ready")
 
     config = chroma_conf.get("retrieval") or {}
-    reranker = None
-    if config.get("enable_reranker"):
-        from rag.rerankers.bge_reranker import BGEReranker
+    from rag.rerankers.factory import build_reranker
 
-        reranker = BGEReranker(
-            model_name=config.get("reranker_model", "BAAI/bge-reranker-v2-m3")
-        )
+    reranker = build_reranker(config)
     return RetrievalRuntime(
         dense=dense,
         bm25=bm25,
         reranker=reranker,
         rrf_k=int(config.get("rrf_k", 60)),
         rerank_top_n=int(config.get("fusion_top_n", 20)),
+        rerank_strategy=str(config.get("rerank_strategy", "shadow")),
+        rerank_hybrid_weight=float(config.get("rerank_hybrid_weight", 0.7)),
+        rerank_model_weight=float(config.get("rerank_model_weight", 0.3)),
+        rerank_fusion_k=int(config.get("rerank_fusion_k", 10)),
+        rerank_bypass_exact_queries=bool(
+            config.get("rerank_bypass_exact_queries", True)
+        ),
+        fusion_anchor_k=int(config.get("fusion_anchor_k", 20)),
     )
 
 
@@ -447,6 +543,14 @@ def main() -> None:
     parser.add_argument("--rag-golden", default=DEFAULT_INPUT)
     parser.add_argument("--manifest", default=DEFAULT_MANIFEST)
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--exclude-queries-from",
+        action="append",
+        help=(
+            "additional JSONL whose queries must be excluded; the frozen test and its "
+            "audited semantic aliases are always locked"
+        ),
+    )
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--max-queries", type=int)
     parser.add_argument("--resume", action="store_true")
@@ -462,6 +566,17 @@ def main() -> None:
 
     try:
         cases = load_cases(Path(args.rag_golden))
+        original_case_count = len(cases)
+        locked_cases = load_cases(Path(DEFAULT_LOCKED_GOLDEN))
+        locked_aliases = load_cases(Path(DEFAULT_LOCKED_QUERY_ALIASES))
+        validate_locked_query_aliases(locked_aliases, locked_cases)
+        for exclusions in (locked_cases, locked_aliases):
+            cases = exclude_locked_queries(cases, exclusions)
+        for exclusion_path in args.exclude_queries_from or []:
+            cases = exclude_locked_queries(cases, load_cases(Path(exclusion_path)))
+        excluded_count = original_case_count - len(cases)
+        if not cases:
+            raise ValueError("all input queries overlap locked evaluation data")
         if args.max_queries is not None:
             cases = cases[: args.max_queries]
         versions = VersionInfo.from_manifest(_load_json(Path(args.manifest)))
@@ -497,6 +612,7 @@ def main() -> None:
                 "status": "completed",
                 "output": str(args.output),
                 "input_cases": len(cases),
+                "excluded_locked_queries": excluded_count,
                 **result,
             },
             ensure_ascii=False,

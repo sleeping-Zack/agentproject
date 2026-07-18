@@ -83,6 +83,8 @@ def candidate(
 
 def test_merge_route_candidates_unions_all_routes_without_keyword_filter(versions):
     dense_a = candidate("a", "text that does not contain an expected keyword", dense_score=0.9)
+    dense_a.document.metadata["source_path"] = "E:\\agentproject\\data\\knowledge.txt"
+    dense_a.document.metadata["source"] = "E:\\agentproject\\data\\knowledge.txt"
     dense_b = candidate("b", "shared", dense_score=0.8)
     bm25_b = candidate("b", "shared", sparse_score=8.0)
     bm25_c = candidate("c", "sparse only", sparse_score=6.0)
@@ -121,6 +123,8 @@ def test_merge_route_candidates_unions_all_routes_without_keyword_filter(version
     assert by_id["b"]["rerank_rank"] == 1
     assert by_id["c"]["dense_rank"] is None
     assert by_id["a"]["chunk_text"].startswith("text that does not contain")
+    assert "source_path" not in by_id["a"]["metadata"]
+    assert by_id["a"]["metadata"]["source"] == "knowledge.txt"
     required = {
         "chunk_text",
         "source",
@@ -134,6 +138,11 @@ def test_merge_route_candidates_unions_all_routes_without_keyword_filter(version
         "fusion_score",
         "rerank_rank",
         "rerank_score",
+        "ranking_score",
+        "ranking_strategy",
+        "rerank_applied",
+        "rerank_evaluated",
+        "rerank_reason",
         "corpus_version",
         "chunk_version",
         "embedding_model",

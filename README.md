@@ -470,7 +470,7 @@ flowchart TB
     Files["data/ 下 PDF / TXT 文件"] --> Loader["pdf_loader / txt_loader"]
     Loader --> MD5["MD5 去重"]
     MD5 --> Splitter["RecursiveCharacterTextSplitter\nchunk_size=200 overlap=20"]
-    Splitter --> Meta["metadata\nsource / chunk_version / chunk_index / doc_id"]
+    Splitter --> Meta["metadata\nsource / title / section / page / chunk_version / doc_id"]
     Meta --> Chroma["Chroma 向量库\nstorage/chroma"]
 
     Query["用户问题"] --> Dense["Dense Retrieval\n真实 relevance score"]
@@ -479,17 +479,27 @@ flowchart TB
     Chroma --> BM25
     Dense --> RRF["Reciprocal Rank Fusion"]
     BM25 --> RRF
-    RRF --> Rerank["可选 Cross-Encoder Rerank"]
-    Rerank --> Safety["RAG 注入过滤"]
+    RRF --> Router["Query Router\n型号/错误码/数值约束旁路"]
+    Router --> Structured["结构化 passage\nmetadata + chunk"]
+    Structured --> Rerank["可选 Cross-Encoder Rerank"]
+    Rerank --> RankFusion["Hybrid rank 90%\nRerank rank 10%"]
+    Router -->|旁路或失败| Safety["RAG 注入过滤"]
+    RankFusion --> Safety
     Safety --> Prompt["RAG Prompt\ninput + context"]
     Prompt --> LLM["Chat Model"]
     LLM --> Answer["答案 + 引用来源"]
     Safety --> Evidence["trace rag_evidence\n供 verifier 使用"]
 ```
 
-RAG 问答由 `RagSummarizeService` 实现：Dense 与 BM25 分别产生带真实分数和排名的 `RetrievalCandidate`，RRF 在不混用分值尺度的前提下融合候选，可选 reranker 对融合头部精排；最终 evidence 经过注入检测后进入 RAG prompt，并生成稳定文档 ID 的引用。
+RAG 问答由 `RagSummarizeService` 实现：Dense 与 BM25 分别产生带真实分数和排名的 `RetrievalCandidate`，RRF 在不混用分值尺度的前提下融合候选。可选 reranker 使用文档标题、产品型号、章节、版本、页码和正文组成结构化输入；`shadow` 模式只记录 Cross-Encoder 排名，`weighted_rrf` 使用人工 dev 选出的 Hybrid 90% 与 BGE 10%。型号、错误码、数值约束查询以及模型失败会保留 Hybrid 顺序。
 
-30 条真实语料实测中，Dense / Hybrid / BGE Rerank 的 Recall@5 分别为 `0.8056 / 0.9333 / 0.7389`，MRR 为 `0.8778 / 0.9333 / 0.8389`。当前 BGE 模型在 CPU 上平均增加约 `29.35s` 延迟且质量退化，因此配置保持默认关闭；该结论和三策略逐条冻结排名已进入 baseline，后续替换模型必须先通过回归门禁。
+旧“完全替换排序”实验中，30 条冻结 test 的 Recall@5 从 Hybrid `0.9333` 降到 `0.7389`。本轮 25 条、858 个候选均完成审核；90/10 融合在 dev 上把 Recall@5 从 `0.2739` 提到 `0.2755`、nDCG@5 从 `0.6037` 提到 `0.6066`，没有逐条退化。参数冻结后，test 的 Recall@5 / MRR / nDCG@5 为 `0.9333 / 0.9333 / 0.9035`，与 Hybrid 完全持平。
+
+项目同时提供真实 FastAPI BGE 服务、远程客户端、超时/断路器/Hybrid 回退、dev-only 调参和三组隔离 chunk 索引。当前 CPU 服务平均约 `10s`、P95 约 `12s`，未通过 `1s` 发布门禁，因此生产仍默认关闭，实验默认 `shadow`。完整结果、启动方式和门禁见 [`docs/rerank_engineering.md`](docs/rerank_engineering.md)。
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn api.reranker_server:app --host 127.0.0.1 --port 8090
+```
 
 ---
 
@@ -708,10 +718,11 @@ flowchart TB
 ```powershell
 python -m pytest tests -q
 python -m ruff check .
-python scripts/evaluate_retrieval.py --fixture evals/fixtures/retrieval_rankings_v1.json --baseline evals/baselines/retrieval_baseline_v1.json --gate
-python scripts/evaluate_generation.py --baseline evals/baselines/generation_baseline_v1.json --gate
-python scripts/evaluate_agent.py --golden evals/agent_offline_golden.jsonl --mode harness --offline --baseline evals/baselines/agent_baseline_v1.json --gate --min-case-count 60
-python scripts/benchmark_api.py --url http://127.0.0.1:8000/chat --api-key dev-api-key
+python -m scripts.evaluate_retrieval --fixture evals/fixtures/retrieval_rankings_v1.json --baseline evals/baselines/retrieval_baseline_v1.json --gate
+$env:AGENT_RERANK_STRATEGY="weighted_rrf"; python -m scripts.evaluate_retrieval --enable-reranker --candidate-k 20 --report reports/retrieval-rerank-online.json
+python -m scripts.evaluate_generation --baseline evals/baselines/generation_baseline_v1.json --gate
+python -m scripts.evaluate_agent --golden evals/agent_offline_golden.jsonl --mode harness --offline --baseline evals/baselines/agent_baseline_v1.json --gate --min-case-count 60
+python -m scripts.benchmark_api --url http://127.0.0.1:8000/chat --api-key dev-api-key
 ```
 
 PR 门禁同时检查检索 Recall / Precision / MRR / nDCG，生成事实覆盖、禁止事实、引用、知识库外拒答，以及 Agent pass rate、工具与参数准确率、artifact、P95 延迟和相对基线退化；在线工作流再补充真实模型、真实 embedding、Cross-Encoder 和选择性 Judge 报告。

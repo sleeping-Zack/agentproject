@@ -17,6 +17,7 @@ from rag.retrievers.bm25_retriever import BM25Retriever
 from rag.retrievers.dense_retriever import DenseRetriever
 from rag.retrievers.hybrid_retriever import HybridRetriever
 from rag.rerankers.base import BaseReranker
+from rag.rerankers.factory import build_reranker
 from rag.schemas import RetrievalCandidate
 from rag.vector_store import VectorStoreService
 from safety.security import UnsafeInputError, assert_safe_retrieved_content
@@ -53,13 +54,7 @@ class RagResult:
 
 
 def _build_reranker(cfg: Dict[str, Any]) -> Optional[BaseReranker]:
-    if not cfg.get("enable_reranker"):
-        return None
-    try:
-        from rag.rerankers.bge_reranker import BGEReranker
-        return BGEReranker(model_name=cfg.get("reranker_model", "BAAI/bge-reranker-v2-m3"))
-    except Exception:
-        return None
+    return build_reranker(cfg)
 
 
 class RagSummarizeService(object):
@@ -122,6 +117,14 @@ class RagSummarizeService(object):
                 rrf_k=int(cfg.get("rrf_k", 60)),
                 rerank_top_n=int(cfg.get("fusion_top_n", 20)),
                 final_k=int(cfg.get("final_top_n", chroma_conf.get("k", 5))),
+                rerank_strategy=str(cfg.get("rerank_strategy", "shadow")),
+                rerank_hybrid_weight=float(cfg.get("rerank_hybrid_weight", 0.7)),
+                rerank_model_weight=float(cfg.get("rerank_model_weight", 0.3)),
+                rerank_fusion_k=int(cfg.get("rerank_fusion_k", 10)),
+                rerank_bypass_exact_queries=bool(
+                    cfg.get("rerank_bypass_exact_queries", True)
+                ),
+                fusion_anchor_k=int(cfg.get("fusion_anchor_k", 20)),
             )
         return self._hybrid
 
@@ -141,6 +144,14 @@ class RagSummarizeService(object):
         ctx = request_context()
         extra = ctx.extra or {}
         retrieval_cfg = getattr(self, "_retrieval_cfg", {}) or {}
+        configured_retrieval_version = str(
+            retrieval_cfg.get("version") or "unversioned"
+        )
+        if retrieval_cfg.get("enable_reranker"):
+            configured_retrieval_version = (
+                f"{configured_retrieval_version}:"
+                f"{retrieval_cfg.get('rerank_version', 'rerank-unversioned')}"
+            )
         configured_model = (
             f"{rag_conf.get('model_provider', 'unknown')}:"
             f"{rag_conf.get('chat_model_name', 'unknown')}"
@@ -171,8 +182,7 @@ class RagSummarizeService(object):
             "retrieval_version": str(
                 retrieval_version
                 or extra.get("retrieval_version")
-                or retrieval_cfg.get("version")
-                or "unversioned"
+                or configured_retrieval_version
             ),
             "model_version": str(
                 model_version

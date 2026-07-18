@@ -48,6 +48,67 @@ def _apply_rag_env_overrides(config: dict) -> dict:
         config["embedding_model_name"] = embedding_model_name
     return config
 
+
+def _apply_chroma_env_overrides(config: dict) -> dict:
+    retrieval = config.setdefault("retrieval", {})
+    string_overrides = {
+        "reranker_backend": os.getenv("AGENT_RERANK_BACKEND"),
+        "reranker_url": os.getenv("AGENT_RERANK_URL"),
+        "reranker_model": os.getenv("AGENT_RERANK_MODEL"),
+        "rerank_version": os.getenv("AGENT_RERANK_VERSION"),
+        "rerank_strategy": os.getenv("AGENT_RERANK_STRATEGY"),
+    }
+    for key, value in string_overrides.items():
+        if value:
+            retrieval[key] = value.strip()
+
+    numeric_overrides = {
+        "rerank_hybrid_weight": (os.getenv("AGENT_RERANK_HYBRID_WEIGHT"), float),
+        "rerank_model_weight": (os.getenv("AGENT_RERANK_MODEL_WEIGHT"), float),
+        "rerank_fusion_k": (os.getenv("AGENT_RERANK_FUSION_K"), int),
+        "rerank_max_document_chars": (
+            os.getenv("AGENT_RERANK_MAX_DOCUMENT_CHARS"),
+            int,
+        ),
+        "reranker_timeout_seconds": (
+            os.getenv("AGENT_RERANK_TIMEOUT_SECONDS"),
+            float,
+        ),
+        "reranker_failure_threshold": (
+            os.getenv("AGENT_RERANK_FAILURE_THRESHOLD"),
+            int,
+        ),
+        "reranker_recovery_seconds": (
+            os.getenv("AGENT_RERANK_RECOVERY_SECONDS"),
+            float,
+        ),
+    }
+    for key, (value, converter) in numeric_overrides.items():
+        if value:
+            try:
+                retrieval[key] = converter(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid environment value for {key}: {value}") from exc
+
+    bool_overrides = {
+        "enable_reranker": os.getenv("AGENT_RERANK_ENABLED"),
+        "rerank_bypass_exact_queries": os.getenv(
+            "AGENT_RERANK_BYPASS_EXACT_QUERIES"
+        ),
+    }
+    for key, value in bool_overrides.items():
+        if value:
+            normalized = value.strip().lower()
+            if normalized not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+                raise ValueError(f"invalid environment value for {key}: {value}")
+            retrieval[key] = normalized in {"1", "true", "yes", "on"}
+    return config
+
+
+def _resolve_config_path(environment_name: str, default_path: str) -> str:
+    configured = os.getenv(environment_name)
+    return get_abs_path(configured.strip()) if configured else get_abs_path(default_path)
+
 def load_rag_config(config_path: str=get_abs_path("config/rag.yml"), encoding: str="utf-8"):
     with open(config_path, "r", encoding=encoding) as f:
         return _apply_rag_env_overrides(yaml.load(f, Loader=yaml.FullLoader))
@@ -55,7 +116,7 @@ def load_rag_config(config_path: str=get_abs_path("config/rag.yml"), encoding: s
 
 def load_chroma_config(config_path: str=get_abs_path("config/chroma.yml"), encoding: str="utf-8"):
     with open(config_path, "r", encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+        return _apply_chroma_env_overrides(yaml.load(f, Loader=yaml.FullLoader))
 
 
 def load_prompts_config(config_path: str=get_abs_path("config/prompts.yml"), encoding: str="utf-8"):
@@ -69,7 +130,9 @@ def load_agent_config(config_path: str=get_abs_path("config/agent.yml"), encodin
 
 
 rag_conf = load_rag_config()
-chroma_conf = load_chroma_config()
+chroma_conf = load_chroma_config(
+    _resolve_config_path("AGENT_CHROMA_CONFIG_PATH", "config/chroma.yml")
+)
 prompts_conf = load_prompts_config()
 agent_conf = load_agent_config()
 

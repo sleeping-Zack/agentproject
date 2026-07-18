@@ -6,7 +6,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from utils.path_tool import get_abs_path
 from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type, get_file_md5_hex
 from utils.logger_handler import logger
-from rag.rag_utils import build_document_metadata
+from rag.rag_utils import build_document_metadata, markdown_section_title
 from rag.retrievers.bm25_retriever import BM25Retriever
 import os
 import threading
@@ -153,10 +153,16 @@ class VectorStoreService:
                     path,
                     chunk_version=chroma_conf.get("chunk_version", "v1"),
                 )
+                current_section = None
                 for index, doc in enumerate(split_document):
                     doc.metadata.update(base_metadata)
                     doc.metadata["chunk_index"] = index
                     doc.metadata["doc_id"] = f"{md5_hex}:{index}"
+                    section_title = markdown_section_title(doc.page_content)
+                    if section_title:
+                        current_section = section_title
+                    if current_section:
+                        doc.metadata["section_title"] = current_section
 
                 # 将内容存入向量库
                 self.vector_store.add_documents(split_document)

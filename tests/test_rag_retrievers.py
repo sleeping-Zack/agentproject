@@ -97,7 +97,10 @@ def test_hybrid_reranker_swaps_order_of_top_n():
     class FlipReranker:
         def rerank(self, query, candidates, top_n=5):
             # 简单反转 head 顺序，验证 hybrid 会用 rerank 后的排序
-            return list(reversed(candidates))
+            result = list(reversed(candidates))
+            for index, candidate in enumerate(result):
+                candidate.rerank_score = float(len(result) - index)
+            return result
 
     hybrid = HybridRetriever(
         dense=FakeDense(dense),

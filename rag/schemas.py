@@ -21,6 +21,7 @@ class RetrievalCandidate:
     sparse_score: Optional[float] = None
     fusion_score: Optional[float] = None
     rerank_score: Optional[float] = None
+    ranking_score: Optional[float] = None
     meta: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -33,8 +34,14 @@ class RetrievalCandidate:
         return str(md.get("source_name") or md.get("source") or md.get("file") or "unknown")
 
     def final_score(self) -> float:
-        """返回可用的最强信号：rerank > fusion > dense > sparse。"""
-        for value in (self.rerank_score, self.fusion_score, self.dense_score, self.sparse_score):
+        """返回最终排序实际使用的分数，并兼容未融合的旧候选。"""
+        for value in (
+            self.ranking_score,
+            self.rerank_score,
+            self.fusion_score,
+            self.dense_score,
+            self.sparse_score,
+        ):
             if value is not None:
                 return float(value)
         return 0.0

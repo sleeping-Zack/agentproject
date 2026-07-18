@@ -15,6 +15,18 @@ def test_final_score_preserves_a_real_zero_rerank_score():
     assert candidate.final_score() == 0.0
 
 
+def test_final_score_prefers_combined_ranking_score():
+    candidate = RetrievalCandidate(
+        doc_id="doc",
+        document=Document(page_content="content"),
+        fusion_score=0.2,
+        rerank_score=0.9,
+        ranking_score=0.08,
+    )
+
+    assert candidate.final_score() == 0.08
+
+
 def test_stable_doc_id_does_not_depend_on_fallback_rank():
     document = Document(page_content="同一个没有 metadata 的旧文档")
 

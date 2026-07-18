@@ -13,15 +13,28 @@ separators: ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
 
 # 混合检索配置：Dense + BM25 -> RRF -> (可选) Reranker
 retrieval:
-  version: hybrid-rrf-v1   # 检索策略或参数语义变更时递增
+  version: hybrid-rrf-v1   # 基础召回版本；保持与已冻结 Hybrid 基线一致
   dense_k: 20              # Dense 召回数
   bm25_k: 20               # BM25 召回数
   rrf_k: 60                # RRF 融合常数
+  fusion_anchor_k: 20      # 扩大召回池时保护已验证的 Top20 顺序
   fusion_top_n: 20         # 融合后进入 rerank 的候选数
   final_top_n: 5           # 最终返回的证据数
   enable_bm25: true
   enable_reranker: false   # 默认关闭；本地/线上按需 true
+  reranker_backend: local  # local 或 remote；生产链路优先 remote
+  reranker_url: http://127.0.0.1:8090/rerank
   reranker_model: BAAI/bge-reranker-v2-m3
+  reranker_timeout_seconds: 2.0
+  reranker_failure_threshold: 3
+  reranker_recovery_seconds: 30.0
+  rerank_version: bge-policy-v3
+  rerank_strategy: shadow  # 先记录模型排名；通过门禁后才切 weighted_rrf
+  rerank_hybrid_weight: 0.9  # 人工 dev 选出的保守权重；线上仍保持 shadow
+  rerank_model_weight: 0.1
+  rerank_fusion_k: 10
+  rerank_bypass_exact_queries: true  # 型号、错误码、数值约束优先保留 Hybrid
+  rerank_max_document_chars: 1200
   bm25_index_path: storage/bm25_index.pkl
   min_dense_relevance: 0.15  # 低于阈值且无 BM25 支持时视为知识库外问题
   min_sparse_relevance: 1.0

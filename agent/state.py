@@ -144,6 +144,7 @@ class AgentState:
     session_id: str
     tenant_id: str
     user_goal: str
+    user_id: Optional[str] = None
     user_role: str = "user"
     scene: str = "default"
     plan: List[Dict[str, Any]] = field(default_factory=list)

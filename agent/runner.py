@@ -27,6 +27,7 @@ class AgentTask:
     query: str
     session_id: str = "default"
     tenant_id: str = "default"
+    user_id: Optional[str] = None
     user_role: str = "user"
     scene: str = "default"
     request_id: str = field(default_factory=lambda: str(uuid4()))
@@ -79,6 +80,7 @@ class ReactAgentBackend:
                 session_id=task.session_id,
                 request_id=task.request_id,
                 tenant_id=task.tenant_id,
+                user_id=task.user_id,
                 user_role=task.user_role,
                 scene=task.scene,
                 approval_id=task.approval_id,
@@ -197,6 +199,7 @@ class AgentRunner:
             request_id=task.request_id,
             session_id=task.session_id,
             tenant_id=task.tenant_id,
+            user_id=task.user_id,
             user_goal=task.query,
             user_role=task.user_role,
             scene=scene,
@@ -535,6 +538,7 @@ class AgentRunner:
     def stream_identity(task: AgentTask) -> Dict[str, str]:
         return {
             "tenant_id": task.tenant_id,
+            "user_id": task.user_id or "",
             "session_id": task.session_id,
             "query_sha256": hashlib.sha256(task.query.encode("utf-8")).hexdigest(),
         }
@@ -694,6 +698,7 @@ class AgentRunner:
                 assistant_message=answer,
                 status=state.status,
                 tenant_id=state.tenant_id,
+                user_id=state.user_id,
             )
         result = AgentRunResult(
             state=state,

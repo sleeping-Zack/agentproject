@@ -5,6 +5,7 @@ import os
 from services.approval_store import SQLiteApprovalStore
 from services.artifact_store import SQLiteArtifactStore
 from services.persistence import SQLiteStore
+from services.memory_store import PostgresMemoryStore, SQLiteMemoryStore
 from services.postgres import (
     PostgresApprovalStore,
     PostgresArtifactStore,
@@ -30,6 +31,24 @@ def create_session_store():
     if _backend("AGENT_STORAGE_BACKEND") == "postgres":
         return PostgresStore(_database_url())
     return SQLiteStore(os.getenv("AGENT_DB_PATH", "storage/agent.db"))
+
+
+def create_memory_store():
+    if _backend("AGENT_STORAGE_BACKEND") == "postgres":
+        return PostgresMemoryStore(_database_url())
+    return SQLiteMemoryStore(os.getenv("AGENT_DB_PATH", "storage/agent.db"))
+
+
+def create_memory_index():
+    if os.getenv("AGENT_MEMORY_VECTOR_ENABLED", "false").strip().lower() != "true":
+        return None
+    from agent.memory_index import ChromaMemoryIndex
+    from model.factory import embed_model
+
+    return ChromaMemoryIndex(
+        os.getenv("AGENT_MEMORY_VECTOR_PATH", "storage/memory_chroma"),
+        embed_model,
+    )
 
 
 def create_approval_store():

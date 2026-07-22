@@ -1,4 +1,7 @@
 from agent.memory import ConversationMemory, InMemorySessionStore
+from agent.long_term_memory import LongTermMemoryService
+from services.memory_store import SQLiteMemoryStore
+from services.persistence import SQLiteStore
 
 
 def test_conversation_memory_keeps_bounded_history():
@@ -133,3 +136,67 @@ def test_conversation_memory_only_commits_completed_or_rejected_turns():
         {"role": "user", "content": "危险操作"},
         {"role": "assistant", "content": "请求未执行：该操作不安全。"},
     ]
+
+
+def test_explicit_memory_is_available_immediately_after_commit(tmp_path):
+    long_term = LongTermMemoryService(SQLiteMemoryStore(str(tmp_path / "memory.db")))
+    memory = ConversationMemory(long_term_memory=long_term)
+
+    memory.commit_turn(
+        "session-1",
+        "request-1",
+        "请记住我的扫地机器人型号是 S10",
+        "好的，已经记住。",
+        "completed",
+        tenant_id="tenant-a",
+        user_id="user-1",
+    )
+
+    facts = long_term.list_memories("tenant-a", "user-1")
+    assert [(fact.key, fact.value) for fact in facts] == [("device.model", "S10")]
+
+
+def test_context_uses_token_budget_and_includes_recalled_user_memory(tmp_path):
+    long_term = LongTermMemoryService(SQLiteMemoryStore(str(tmp_path / "memory.db")))
+    long_term.remember("tenant-a", "user-1", "device.model", "S10", "device_identity")
+    memory = ConversationMemory(
+        max_messages=None,
+        max_context_tokens=20,
+        long_term_memory=long_term,
+    )
+    memory.add_message("session-1", "user", "很久以前的一段很长的对话", tenant_id="tenant-a")
+    memory.add_message("session-1", "assistant", "最近回答", tenant_id="tenant-a")
+
+    context = memory.build_context(
+        "session-1", "我的设备型号", tenant_id="tenant-a", user_id="user-1"
+    )
+
+    assert "device.model: S10" in context[0]["content"]
+    assert context[-1] == {"role": "assistant", "content": "最近回答"}
+
+
+def test_forget_physically_removes_sources_and_invalidates_conversation_cache(tmp_path):
+    db_path = str(tmp_path / "memory.db")
+    session_store = SQLiteStore(db_path)
+    durable_store = SQLiteMemoryStore(db_path)
+    long_term = LongTermMemoryService(durable_store)
+    memory = ConversationMemory(
+        store=session_store,
+        summary_store=durable_store,
+        long_term_memory=long_term,
+    )
+    memory.commit_turn(
+        "session-1",
+        "request-1",
+        "请记住我的扫地机器人型号是 S10",
+        "好的，已经记住。",
+        "completed",
+        tenant_id="tenant-a",
+        user_id="user-1",
+    )
+    assert len(memory.get_messages("session-1", tenant_id="tenant-a")) == 2
+
+    long_term.forget("tenant-a", "user-1", key="device.model")
+
+    assert memory.get_messages("session-1", tenant_id="tenant-a") == []
+    assert long_term.list_memories("tenant-a", "user-1", include_inactive=True) == []

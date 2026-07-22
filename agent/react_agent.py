@@ -8,6 +8,7 @@ from langchain.agents import create_agent
 
 from agent.budget import BudgetManager
 from agent.memory import ConversationMemory
+from agent.long_term_memory import LongTermMemoryService
 from agent.planner import (
     PlanRunResult,
     PlannerAgent,
@@ -34,7 +35,7 @@ from observability.event_bus import EventBackpressureError, event_bus
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
 from safety.security import UnsafeInputError, assert_safe_user_input
-from services.factories import create_session_store
+from services.factories import create_memory_index, create_memory_store, create_session_store
 from utils.prompt_loader import load_system_prompts
 
 
@@ -52,14 +53,24 @@ class ReactAgent:
         self,
         session_store=None,
         enable_summary: bool = True,
-        max_messages: int = 20,
+        max_messages: Optional[int] = None,
+        memory_store=None,
+        long_term_memory: Optional[LongTermMemoryService] = None,
     ) -> None:
         store = session_store if session_store is not None else _default_session_store()
+        durable_memory_store = memory_store or create_memory_store()
+        self.long_term_memory = long_term_memory or LongTermMemoryService(
+            durable_memory_store,
+            search_index=create_memory_index(),
+        )
         summarizer = ConversationSummarizer() if enable_summary else None
         self.memory = ConversationMemory(
             max_messages=max_messages,
             store=store,
             summarizer=summarizer,
+            max_context_tokens=int(os.getenv("AGENT_MEMORY_CONTEXT_TOKENS", "6000")),
+            summary_store=durable_memory_store,
+            long_term_memory=self.long_term_memory,
         )
         self.agent = create_agent(
             model=chat_model,
@@ -149,6 +160,7 @@ class ReactAgent:
     def execute_stream(self, query: str, session_id: str = "default",
                        request_id: Optional[str] = None,
                        tenant_id: str = "default",
+                       user_id: Optional[str] = None,
                        user_role: str = "user",
                        scene: str = "default",
                        approval_id: Optional[str] = None,
@@ -171,7 +183,16 @@ class ReactAgent:
                 yield f"请求未执行：{str(exc)}\n"
                 return
 
-            history = self.memory.get_messages(session_id, tenant_id=tenant_id)
+            build_context = getattr(self.memory, "build_context", None)
+            if callable(build_context):
+                history = build_context(
+                    session_id,
+                    query,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
+            else:
+                history = self.memory.get_messages(session_id, tenant_id=tenant_id)
             input_dict = {"messages": history + [{"role": "user", "content": query}]}
 
             latest_response = ""
@@ -187,6 +208,7 @@ class ReactAgent:
                         "request_id": request_id,
                         "session_id": session_id,
                         "tenant_id": tenant_id,
+                        "user_id": user_id,
                         "user_role": user_role,
                         "scene": scene,
                         "approval_id": approval_id,

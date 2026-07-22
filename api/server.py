@@ -9,6 +9,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from agent.long_term_memory import MemoryCategory
 from agent.react_agent import ReactAgent
 from agent.runner import AgentRunner, AgentTask, ReactAgentBackend
 from agent.tools.agent_tools import (
@@ -115,6 +116,17 @@ class ApprovalDecisionRequest(BaseModel):
     decided_by: str = "operator"
 
 
+class MemoryWriteRequest(BaseModel):
+    key: str = Field(..., min_length=1, max_length=200)
+    value: str = Field(..., min_length=1, max_length=4000)
+    category: MemoryCategory
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class MemoryForgetRequest(BaseModel):
+    key: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+
 class JudgeCase(BaseModel):
     query: str
     context: str = ""
@@ -174,6 +186,15 @@ def _require_approval_operator(context: AuthContext) -> None:
         raise HTTPException(status_code=403, detail="approval requires operator/admin role")
 
 
+def _require_memory_user_id(principal_id: Optional[str]) -> str:
+    if principal_id is None or not principal_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="X-Principal-ID is required for cross-session memory",
+        )
+    return principal_id.strip()
+
+
 def _load_tenant_approval(approval_id: str, tenant_id: str):
     try:
         approval = approval_store.get(approval_id)
@@ -187,6 +208,80 @@ def _load_tenant_approval(approval_id: str, tenant_id: str):
 @app.get("/health")
 async def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/memory")
+async def list_memory(
+    include_inactive: bool = False,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> List[Dict]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    user_id = _require_memory_user_id(x_principal_id)
+    memories = agent.long_term_memory.list_memories(
+        auth.tenant_id, user_id, include_inactive=include_inactive
+    )
+    return [_memory_payload(memory) for memory in memories]
+
+
+@app.post("/memory")
+async def remember(
+    request: MemoryWriteRequest,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    user_id = _require_memory_user_id(x_principal_id)
+    try:
+        memory = agent.long_term_memory.remember(
+            auth.tenant_id,
+            user_id,
+            request.key,
+            request.value,
+            request.category,
+            importance=request.importance,
+            explicit=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _memory_payload(memory)
+
+
+@app.delete("/memory")
+async def forget_memory(
+    request: Optional[MemoryForgetRequest] = None,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict[str, int]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    user_id = _require_memory_user_id(x_principal_id)
+    deleted = agent.long_term_memory.forget(
+        auth.tenant_id, user_id, key=request.key if request else None
+    )
+    return {"deleted": deleted}
+
+
+def _memory_payload(memory) -> Dict:
+    return {
+        "memory_id": memory.memory_id,
+        "key": memory.key,
+        "value": memory.value,
+        "category": memory.category.value,
+        "status": memory.status,
+        "version": memory.version,
+        "confidence": memory.confidence,
+        "importance": memory.importance,
+        "explicit": memory.explicit,
+        "source_event_id": memory.source_event_id,
+        "supersedes_id": memory.supersedes_id,
+        "last_confirmed_at": memory.last_confirmed_at.isoformat(),
+    }
 
 
 @app.get("/tools/manifest")
@@ -225,6 +320,7 @@ async def chat(
         query=request.message,
         session_id=request.session_id,
         tenant_id=tenant_id,
+        user_id=x_principal_id.strip() if x_principal_id and x_principal_id.strip() else None,
         user_role=auth.user_role,
         scene="default",
     )
@@ -333,6 +429,7 @@ async def chat_stream(
         query=request.message,
         session_id=request.session_id,
         tenant_id=tenant_id,
+        user_id=x_principal_id.strip() if x_principal_id and x_principal_id.strip() else None,
         user_role=auth.user_role,
         scene="default",
         request_id=request_id,
@@ -449,6 +546,7 @@ async def harness_run(
         query=request.message,
         session_id=request.session_id,
         tenant_id=tenant_id,
+        user_id=x_principal_id.strip() if x_principal_id and x_principal_id.strip() else None,
         user_role=auth.user_role,
         scene=request.scene,
         approval_id=request.approval_id,

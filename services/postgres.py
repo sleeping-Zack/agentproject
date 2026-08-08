@@ -50,6 +50,21 @@ class PostgresStore(_PostgresBackend):
                 "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
             )
             conn.execute(
+                "ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS "
+                "user_id TEXT NOT NULL DEFAULT ''"
+            )
+            memory_events = conn.execute(
+                "SELECT to_regclass('memory_events') AS name"
+            ).fetchone()
+            if memory_events and memory_events[0]:
+                conn.execute(
+                    "UPDATE session_messages AS messages SET user_id = events.user_id FROM ("
+                    "SELECT tenant_id, session_id, MIN(user_id) AS user_id FROM memory_events "
+                    "GROUP BY tenant_id, session_id HAVING COUNT(DISTINCT user_id) = 1) AS events "
+                    "WHERE messages.tenant_id = events.tenant_id "
+                    "AND messages.session_id = events.session_id AND messages.user_id = ''"
+                )
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS traces ("
                 "request_id TEXT PRIMARY KEY,"
                 "session_id TEXT NOT NULL,"
@@ -62,8 +77,13 @@ class PostgresStore(_PostgresBackend):
                 "ON session_messages(tenant_id, session_id)"
             )
             conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_session_message_idempotency "
-                "ON session_messages(tenant_id, session_id, request_id, role)"
+                "CREATE INDEX IF NOT EXISTS idx_session_messages_owner "
+                "ON session_messages(tenant_id, user_id, created_at)"
+            )
+            conn.execute("DROP INDEX IF EXISTS idx_session_message_idempotency")
+            conn.execute(
+                "CREATE UNIQUE INDEX idx_session_message_idempotency "
+                "ON session_messages(tenant_id, user_id, session_id, request_id, role)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_traces_tenant ON traces(tenant_id)"
@@ -76,14 +96,15 @@ class PostgresStore(_PostgresBackend):
         content: str,
         tenant_id: str = "default",
         request_id: Optional[str] = None,
+        user_id: str = "",
     ) -> bool:
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO session_messages("
-                "session_id, tenant_id, request_id, role, content) "
-                "VALUES (%s, %s, %s, %s, %s) "
-                "ON CONFLICT(tenant_id, session_id, request_id, role) DO NOTHING",
-                (session_id, tenant_id, request_id, role, content),
+                "session_id, tenant_id, user_id, request_id, role, content) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT(tenant_id, user_id, session_id, request_id, role) DO NOTHING",
+                (session_id, tenant_id, user_id, request_id, role, content),
             )
         return cursor.rowcount == 1
 
@@ -91,18 +112,58 @@ class PostgresStore(_PostgresBackend):
         self,
         session_id: str,
         tenant_id: str = "default",
+        user_id: Optional[str] = None,
     ) -> List[Dict[str, str]]:
+        owner_clause = " AND user_id = %s" if user_id is not None else ""
+        params = (session_id, tenant_id, user_id) if user_id is not None else (session_id, tenant_id)
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT role, content FROM session_messages "
-                "WHERE session_id = %s AND tenant_id = %s ORDER BY id",
-                (session_id, tenant_id),
+                f"WHERE session_id = %s AND tenant_id = %s{owner_clause} ORDER BY id",
+                params,
             ).fetchall()
         return [{"role": role, "content": content} for role, content in rows]
 
+    def list_sessions(
+        self, tenant_id: str, user_id: str, limit: int = 100
+    ) -> List[Dict[str, object]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT messages.session_id, COUNT(*) AS message_count, "
+                "MIN(messages.created_at) AS created_at, MAX(messages.created_at) AS updated_at, "
+                "COALESCE((SELECT first_message.content FROM session_messages first_message "
+                "WHERE first_message.tenant_id = messages.tenant_id "
+                "AND first_message.user_id = messages.user_id "
+                "AND first_message.session_id = messages.session_id "
+                "AND first_message.role = 'user' ORDER BY first_message.id LIMIT 1), '') AS title "
+                "FROM session_messages messages WHERE messages.tenant_id = %s "
+                "AND messages.user_id = %s GROUP BY messages.session_id, messages.tenant_id, "
+                "messages.user_id ORDER BY updated_at DESC LIMIT %s",
+                (tenant_id, user_id, limit),
+            ).fetchall()
+        return [
+            {
+                "session_id": row[0], "message_count": row[1], "created_at": row[2],
+                "updated_at": row[3], "title": row[4],
+            }
+            for row in rows
+        ]
+
     def load_messages(self, session_id: str) -> List[Dict[str, str]]:
-        sid, tid = _split_tenant_session(session_id)
-        return self.get_session_messages(sid, tenant_id=tid)
+        sid, tid, uid = _split_tenant_session(session_id)
+        return self.get_session_messages(sid, tenant_id=tid, user_id=uid or None)
+
+    def list_message_refs(self, session_id: str) -> List[str]:
+        sid, tid, uid = _split_tenant_session(session_id)
+        owner_clause = " AND user_id = %s" if uid else ""
+        params = (sid, tid, uid) if uid else (sid, tid)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, role FROM session_messages "
+                f"WHERE session_id = %s AND tenant_id = %s{owner_clause} ORDER BY id",
+                params,
+            ).fetchall()
+        return [f"{row[0]}:{row[1]}" for row in rows]
 
     def append_message(
         self,
@@ -110,14 +171,16 @@ class PostgresStore(_PostgresBackend):
         role: str,
         content: str,
         request_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> bool:
-        sid, tid = _split_tenant_session(session_id)
+        sid, tid, encoded_uid = _split_tenant_session(session_id)
         return self.save_session_message(
             sid,
             role,
             content,
             tenant_id=tid,
             request_id=request_id,
+            user_id=user_id or encoded_uid,
         )
 
     def save_trace(
@@ -142,11 +205,13 @@ class PostgresStore(_PostgresBackend):
                 ),
             )
 
-    def get_trace(self, request_id: str) -> Dict:
+    def get_trace(self, request_id: str, tenant_id: Optional[str] = None) -> Dict:
+        tenant_clause = " AND tenant_id = %s" if tenant_id is not None else ""
+        params = (request_id, tenant_id) if tenant_id is not None else (request_id,)
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT payload FROM traces WHERE request_id = %s",
-                (request_id,),
+                f"SELECT payload FROM traces WHERE request_id = %s{tenant_clause}",
+                params,
             ).fetchone()
         if row is None:
             raise KeyError(request_id)
@@ -155,7 +220,7 @@ class PostgresStore(_PostgresBackend):
 
 class PostgresApprovalStore(_PostgresBackend):
     _COLUMNS = (
-        "approval_id, request_id, tenant_id, user_role, tool_name, args, "
+        "approval_id, request_id, tenant_id, principal_id, user_role, tool_name, args, "
         "reason, status, created_at, decided_at, decided_by"
     )
 
@@ -171,6 +236,7 @@ class PostgresApprovalStore(_PostgresBackend):
                 "approval_id TEXT PRIMARY KEY,"
                 "request_id TEXT NOT NULL,"
                 "tenant_id TEXT NOT NULL,"
+                "principal_id TEXT NOT NULL DEFAULT '',"
                 "user_role TEXT NOT NULL,"
                 "tool_name TEXT NOT NULL,"
                 "args JSONB NOT NULL,"
@@ -179,6 +245,17 @@ class PostgresApprovalStore(_PostgresBackend):
                 "created_at TEXT NOT NULL,"
                 "decided_at TEXT,"
                 "decided_by TEXT)"
+            )
+            conn.execute(
+                "ALTER TABLE approvals "
+                "ADD COLUMN IF NOT EXISTS principal_id TEXT NOT NULL DEFAULT ''"
+            )
+            conn.execute(
+                "UPDATE approvals "
+                "SET status = 'denied', decided_at = %s, "
+                "decided_by = 'system:legacy-scope-migration' "
+                "WHERE status = 'pending' AND principal_id = ''",
+                (utc_now_iso(),),
             )
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_tool "
@@ -193,11 +270,13 @@ class PostgresApprovalStore(_PostgresBackend):
         tool_name: str,
         args: Dict[str, Any],
         reason: str,
+        principal_id: str = "",
     ) -> ApprovalRecord:
         record = ApprovalRecord(
             approval_id=str(uuid4()),
             request_id=request_id,
             tenant_id=tenant_id,
+            principal_id=principal_id,
             user_role=user_role,
             tool_name=tool_name,
             args=args,
@@ -207,13 +286,14 @@ class PostgresApprovalStore(_PostgresBackend):
         with self._connect() as conn:
             row = conn.execute(
                 f"INSERT INTO approvals({self._COLUMNS}) "
-                "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s) "
                 "ON CONFLICT(tenant_id, request_id, tool_name) DO NOTHING "
                 f"RETURNING {self._COLUMNS}",
                 (
                     record.approval_id,
                     record.request_id,
                     record.tenant_id,
+                    record.principal_id,
                     record.user_role,
                     record.tool_name,
                     json.dumps(record.args, ensure_ascii=False),
@@ -241,6 +321,23 @@ class PostgresApprovalStore(_PostgresBackend):
         if row is None:
             raise KeyError(approval_id)
         return self._row_to_record(row)
+
+    def list_approvals(
+        self,
+        tenant_id: str,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[ApprovalRecord]:
+        query = f"SELECT {self._COLUMNS} FROM approvals WHERE tenant_id = %s"
+        params: list[Any] = [tenant_id]
+        if status:
+            query += " AND status = %s"
+            params.append(status)
+        query += " ORDER BY created_at DESC LIMIT %s"
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._row_to_record(row) for row in rows]
 
     def approve(self, approval_id: str, decided_by: str) -> ApprovalRecord:
         return self._decide(approval_id, "approved", decided_by)
@@ -270,14 +367,15 @@ class PostgresApprovalStore(_PostgresBackend):
             approval_id=row[0],
             request_id=row[1],
             tenant_id=row[2],
-            user_role=row[3],
-            tool_name=row[4],
-            args=self._json(row[5]),
-            reason=row[6],
-            status=row[7],
-            created_at=row[8],
-            decided_at=row[9],
-            decided_by=row[10],
+            principal_id=row[3],
+            user_role=row[4],
+            tool_name=row[5],
+            args=self._json(row[6]),
+            reason=row[7],
+            status=row[8],
+            created_at=row[9],
+            decided_at=row[10],
+            decided_by=row[11],
         )
 
 

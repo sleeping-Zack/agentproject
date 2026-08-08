@@ -40,3 +40,19 @@ def test_report_workflow_fallback_for_missing_record():
 
     assert result["fallback"] is True
     assert "没有找到" in result["answer"]
+
+
+def test_report_workflow_accepts_governed_structured_intent_without_keywords():
+    workflow = ReportWorkflow(
+        tool_service=FakeToolService(),
+        rag_service=FakeRagService(),
+    )
+
+    result = workflow.run(
+        "读取本人最近设备数据并分析性能变化",
+        intent="report",
+    )
+
+    assert result["intent"] == "report"
+    assert result["fallback"] is False
+    assert "定时清扫使用率" in result["answer"]

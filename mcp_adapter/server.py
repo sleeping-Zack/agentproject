@@ -58,6 +58,8 @@ class MCPToolServer:
                 scene = "report"
             decision = self.policy.decide(
                 tenant_id=context.tenant_id,
+                principal_id=context.principal_id,
+                data_user_id=context.data_user_id,
                 user_role=context.user_role,
                 scene=scene or "mcp",
                 tool_name=name,
@@ -109,6 +111,12 @@ class MCPToolServer:
                     "reason": "approval does not match tenant or tool",
                     "content": [{"type": "text", "text": "审批记录与当前租户或工具不匹配。"}],
                 }
+            if approval.principal_id and approval.principal_id != context.principal_id:
+                return {
+                    "status": "denied",
+                    "reason": "approval does not match principal",
+                    "content": [{"type": "text", "text": "审批记录不属于当前用户。"}],
+                }
             if approval.is_approved:
                 if approval.args != arguments:
                     return {
@@ -138,6 +146,7 @@ class MCPToolServer:
             tool_name=tool_name,
             args=arguments,
             reason=f"tool requires approval: {tool_name}",
+            principal_id=context.principal_id,
         )
         return {
             "status": "pending_approval",

@@ -89,6 +89,88 @@ def test_parallel_executor_tasks_share_one_budget_manager():
     )
 
 
+def test_executor_respects_dependency_graph_and_passes_verified_results():
+    executor = PlanExecutor(max_workers=4)
+    observed = {}
+
+    executor.register_handler(
+        "source",
+        lambda task: SubTaskResult(
+            id=task.id,
+            kind=task.kind,
+            success=True,
+            content="前置数据",
+        ),
+    )
+
+    def dependent_handler(task):
+        observed.update(task.args["_dependency_results"])
+        return SubTaskResult(
+            id=task.id,
+            kind=task.kind,
+            success=True,
+            content="组合完成",
+        )
+
+    executor.register_handler("dependent", dependent_handler)
+    plan = [
+        SubTask(
+            id="t2",
+            kind="dependent",
+            description="后置任务",
+            depends_on=["t1"],
+        ),
+        SubTask(id="t1", kind="source", description="前置任务"),
+    ]
+
+    results = executor.execute(plan)
+
+    assert observed == {"t1": "前置数据"}
+    assert [result.id for result in results] == ["t2", "t1"]
+    assert all(result.success for result in results)
+
+
+def test_executor_blocks_dependent_task_when_prerequisite_failed():
+    executor = PlanExecutor(max_workers=2)
+    dependent_calls = []
+    executor.register_handler(
+        "source",
+        lambda task: SubTaskResult(
+            id=task.id,
+            kind=task.kind,
+            success=False,
+            content="",
+            error="source_failed",
+        ),
+    )
+    executor.register_handler(
+        "dependent",
+        lambda task: dependent_calls.append(task)
+        or SubTaskResult(
+            id=task.id,
+            kind=task.kind,
+            success=True,
+            content="不应执行",
+        ),
+    )
+
+    results = executor.execute(
+        [
+            SubTask(id="t1", kind="source", description=""),
+            SubTask(
+                id="t2",
+                kind="dependent",
+                description="",
+                depends_on=["t1"],
+            ),
+        ]
+    )
+
+    assert dependent_calls == []
+    assert results[1].success is False
+    assert results[1].error == "dependency_failed:t1"
+
+
 def test_aggregator_merges_multiple_successes():
     aggregator = ResultAggregator()
     plan = [
@@ -105,6 +187,35 @@ def test_aggregator_merges_multiple_successes():
     assert "环境与天气" in answer
     assert "知识库参考" in answer
     assert "晴天" in answer and "主刷" in answer
+
+
+def test_aggregator_marks_partial_results_instead_of_claiming_full_completion():
+    aggregator = ResultAggregator()
+    plan = [
+        SubTask(id="t1", kind="report", description="读取设备报告"),
+        SubTask(id="t2", kind="rag_qa", description="检索故障资料"),
+    ]
+    results = [
+        SubTaskResult(
+            id="t1",
+            kind="report",
+            success=True,
+            content="设备报告已读取",
+        ),
+        SubTaskResult(
+            id="t2",
+            kind="rag_qa",
+            success=False,
+            content="",
+            error="knowledge_not_supported",
+        ),
+    ]
+
+    answer = aggregator.aggregate("分析问题", plan, results)
+
+    assert "已完成部分" in answer
+    assert "部分步骤未能完成" in answer
+    assert "检索故障资料：knowledge_not_supported" in answer
 
 
 def test_planner_agent_end_to_end_with_mock_handlers():
@@ -150,6 +261,18 @@ def test_planner_agent_blocks_invalid_plan_before_execution():
     assert "invalid_task_kind" in result.answer
 
 
+def test_plan_validator_rejects_dependency_cycles():
+    validation = PlanValidator().validate(
+        [
+            SubTask(id="t1", kind="generic", description="", depends_on=["t2"]),
+            SubTask(id="t2", kind="generic", description="", depends_on=["t1"]),
+        ]
+    )
+
+    assert validation.valid is False
+    assert "dependency_cycle" in validation.errors
+
+
 def test_planner_agent_replans_failed_subtask_once():
     planner = TaskPlanner(
         llm_planner=lambda query: [
@@ -186,6 +309,32 @@ def test_planner_agent_replans_failed_subtask_once():
 
     result = agent.run("怎么保养滤网")
 
-    assert any(task.id == "fallback-1" for task in result.plan)
+    assert any(task.id == "fallback-t1" for task in result.plan)
     assert any(item.kind == "generic" and item.success for item in result.results)
     assert "fallback answer" in result.answer
+
+
+def test_replanner_does_not_drop_dependencies_after_verification_or_budget_failure():
+    task = SubTask(
+        id="t3",
+        kind="generic",
+        description="综合前置证据",
+        depends_on=["t1", "t2"],
+    )
+    replanner = Replanner()
+
+    assert replanner.replan(
+        query="综合分析",
+        failed_task=task,
+        failure_reason="subtask_verification_failed:unsupported_claim_rate_exceeded",
+    ) == []
+    assert replanner.replan(
+        query="综合分析",
+        failed_task=task,
+        failure_reason="dependency_failed:t1",
+    ) == []
+    assert replanner.replan(
+        query="综合分析",
+        failed_task=task,
+        failure_reason="max_tokens_exceeded",
+    ) == []

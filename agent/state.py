@@ -154,6 +154,8 @@ class AgentState:
     tool_calls: List[ToolCallRecord] = field(default_factory=list)
     artifacts: List[ArtifactRef] = field(default_factory=list)
     memory_snapshot: Dict[str, Any] = field(default_factory=dict)
+    routing_history: List[Dict[str, Any]] = field(default_factory=list)
+    routing_feedback: Dict[str, Any] = field(default_factory=dict)
     budget: Budget = field(default_factory=Budget)
     status: RunStatus = "running"
     final_answer: Optional[str] = None

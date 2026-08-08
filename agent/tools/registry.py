@@ -62,8 +62,14 @@ def build_default_tool_registry(allowed_tools: Iterable[str]) -> ToolRegistry:
             scope="knowledge:read",
             input_schema={
                 "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string"},
+                    "information_gap": {
+                        "type": "string",
+                        "description": "本次检索要补充的、尚未覆盖的信息缺口",
+                    },
+                },
+                "required": ["query", "information_gap"],
             },
         )
     )

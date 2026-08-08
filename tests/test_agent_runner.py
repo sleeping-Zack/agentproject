@@ -1,7 +1,23 @@
-from agent.runner import AgentBackendResult, AgentRunner, AgentTask
 from agent.memory import ConversationMemory
+from agent.long_term_memory import LongTermMemoryService
+from agent.planner import (
+    RoutingGoal,
+    SemanticRouteProposal,
+    TaskRouter,
+)
+from agent.policies import ToolPolicy
+from agent.runner import (
+    AgentBackendResult,
+    AgentRunner,
+    AgentTask,
+    AutoRoutingBackend,
+)
+from agent.answer_schema import AnswerClaim, StructuredAnswer
+from agent.verifier import AnswerVerifier, VerifyResult
+from agent.tools.registry import build_default_tool_registry
 from services.approval_store import SQLiteApprovalStore
 from services.artifact_store import SQLiteArtifactStore
+from services.memory_store import SQLiteMemoryStore
 from services.persistence import SQLiteStore
 
 
@@ -66,6 +82,146 @@ def test_runner_pauses_for_sensitive_tool_approval(tmp_path):
     assert approval.tool_name == "fetch_external_data"
 
 
+def test_runner_allows_own_report_and_uses_real_policy_arguments(tmp_path):
+    runner = _runner(tmp_path)
+
+    result = runner.run(
+        AgentTask(
+            query="生成我的本月使用报告",
+            session_id="s-own-report",
+            tenant_id="tenant-a",
+            user_id="user-1005",
+            data_user_id="1005",
+            user_role="user",
+            scene="report",
+            request_id="req-own-report",
+        )
+    )
+
+    assert result.state.status == "completed"
+    assert result.approval_id is None
+    policy_call = next(
+        call for call in result.state.tool_calls if call.tool_name == "fetch_external_data"
+    )
+    assert policy_call.args == {"user_id": "1005", "month": "2025-09"}
+
+
+def test_semantic_route_resolves_report_scene_before_governance(tmp_path):
+    registry = build_default_tool_registry(
+        ["fetch_external_data", "rag_summarize"]
+    )
+    policy = ToolPolicy(tool_registry=registry)
+    router = TaskRouter(
+        semantic_enabled=True,
+        semantic_classifier=lambda _query, _context: SemanticRouteProposal(
+            execution_mode="react",
+            goals=(
+                RoutingGoal(
+                    id="g1",
+                    description="读取本人最近设备数据",
+                    required_tools=("fetch_external_data",),
+                ),
+            ),
+            risk="medium",
+            confidence=0.94,
+            reasons=("semantic_tool_required",),
+        ),
+    )
+    backend = AutoRoutingBackend(
+        router=router,
+        react_backend=FakeBackend(),
+        planner_backend=FakeBackend(),
+        tool_policy=policy,
+    )
+    runner = AgentRunner(
+        backend=backend,
+        policy=policy,
+        approval_store=SQLiteApprovalStore(str(tmp_path / "approvals.db")),
+        artifact_store=SQLiteArtifactStore(str(tmp_path / "artifacts.db")),
+    )
+    task = AgentTask(
+        query="看看我最近的设备数据有什么异常",
+        session_id="s-semantic-report",
+        tenant_id="tenant-a",
+        user_id="user-1005",
+        data_user_id="1005",
+        user_role="user",
+        request_id="req-semantic-report",
+    )
+
+    result = runner.run(task)
+
+    assert result.state.status == "completed"
+    assert task.scene == "report"
+    assert task.routing_decision.required_tools == ("fetch_external_data",)
+    assert any(
+        call.tool_name == "fetch_external_data" and call.status == "approved"
+        for call in result.state.tool_calls
+    )
+
+
+def test_runner_binds_cross_user_approval_to_requester_and_real_arguments(tmp_path):
+    runner = _runner(tmp_path)
+
+    result = runner.run(
+        AgentTask(
+            query="生成用户1001在2025-09的使用报告",
+            session_id="s-cross-report",
+            tenant_id="tenant-a",
+            user_id="user-1005",
+            data_user_id="1005",
+            user_role="user",
+            scene="report",
+            request_id="req-cross-report",
+        )
+    )
+
+    approval = runner.approval_store.get(result.approval_id)
+    assert result.state.status == "pending_approval"
+    assert approval.principal_id == "user-1005"
+    assert approval.args == {"user_id": "1001", "month": "2025-09"}
+
+
+def test_runner_resumes_only_the_approved_report_scope(tmp_path):
+    runner = _runner(tmp_path)
+    original = AgentTask(
+        query="生成用户1001在2025-09的使用报告",
+        session_id="s-approved-report",
+        tenant_id="tenant-a",
+        user_id="user-1005",
+        data_user_id="1005",
+        user_role="user",
+        scene="report",
+        request_id="req-pending-report",
+    )
+    pending = runner.run(original)
+    runner.approval_store.approve(pending.approval_id, decided_by="operator-1")
+
+    resumed = runner.run(
+        AgentTask(
+            **{
+                **original.__dict__,
+                "request_id": "req-resumed-report",
+                "approval_id": pending.approval_id,
+            }
+        )
+    )
+    wrong_scope = runner.run(
+        AgentTask(
+            **{
+                **original.__dict__,
+                "query": "生成用户1002在2025-09的使用报告",
+                "request_id": "req-wrong-scope",
+                "approval_id": pending.approval_id,
+            }
+        )
+    )
+
+    assert resumed.state.status == "completed"
+    assert wrong_scope.state.status == "rejected"
+    assert wrong_scope.state.error == "approval_arguments_mismatch"
+
+
 def test_runner_blocks_when_budget_is_exhausted(tmp_path):
     runner = _runner(tmp_path, max_steps=0)
 
@@ -80,6 +236,87 @@ def test_runner_blocks_when_budget_is_exhausted(tmp_path):
 
     assert result.state.status == "blocked"
     assert result.state.error == "max_steps_exceeded"
+
+
+class _BudgetHungryPlannerBackend:
+    manages_budget = True
+    defers_answer_tokens = True
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, task, state):
+        self.calls += 1
+        state.budget.manager.record_tokens(1100)
+        partial = "已核验资料：每次清扫后应清理滚刷和轮组。"
+        return AgentBackendResult(
+            answer="未经证据支持的综合结论",
+            evidence=[
+                {
+                    "id": "plan-step-t1",
+                    "source": "planner",
+                    "content": partial,
+                }
+            ],
+            tool_results=[
+                {
+                    "tool": "plan:rag_qa",
+                    "status": "success",
+                    "args": {"step_id": "t1"},
+                    "content": partial,
+                }
+            ],
+            budget_accounted=True,
+            safe_fallback_answer=f"## 已完成部分\n{partial}",
+            safe_fallback_structured_answer=StructuredAnswer(
+                summary=partial,
+                claims=[
+                    AnswerClaim(
+                        text=partial,
+                        evidence_ids=["plan-step-t1"],
+                    )
+                ],
+                citations=["plan-step-t1"],
+            ),
+        )
+
+
+class _RetryThenAcceptFallbackVerifier:
+    def verify(self, *, answer, **kwargs):
+        if answer == "未经证据支持的综合结论":
+            return VerifyResult(
+                passed=False,
+                action="retry",
+                score=2.0,
+                reasons=["unsupported_claims"],
+            )
+        return AnswerVerifier().verify(answer=answer, **kwargs)
+
+
+def test_runner_uses_verified_partial_instead_of_starting_impossible_retry(tmp_path):
+    backend = _BudgetHungryPlannerBackend()
+    runner = AgentRunner(
+        backend=backend,
+        verifier=_RetryThenAcceptFallbackVerifier(),
+        approval_store=SQLiteApprovalStore(str(tmp_path / "approvals.db")),
+        artifact_store=SQLiteArtifactStore(str(tmp_path / "artifacts.db")),
+        max_tokens=1200,
+        max_verification_retries=1,
+    )
+
+    result = runner.run(
+        AgentTask(
+            query="结合资料分析问题并给出步骤",
+            request_id="req-budget-limited-retry",
+        )
+    )
+
+    assert backend.calls == 1
+    assert result.state.status == "completed"
+    assert result.state.error is None
+    assert result.answer.startswith("## 已完成部分")
+    assert result.verifier is not None
+    assert result.verifier.passed is True
 
 
 def test_runner_retry_commits_each_message_once(tmp_path):
@@ -105,6 +342,37 @@ def test_runner_retry_commits_each_message_once(tmp_path):
         {"role": "user", "content": "怎么保养尘盒"},
         {"role": "assistant", "content": "建议每周清理尘盒。\n\n引用来源：manual-1"},
     ]
+
+
+def test_runner_persists_explicit_policy_before_answer_and_applies_it_next_turn(tmp_path):
+    store = SQLiteStore(str(tmp_path / "messages.db"))
+    long_term = LongTermMemoryService(SQLiteMemoryStore(str(tmp_path / "memory.db")))
+    memory = ConversationMemory(store=store, long_term_memory=long_term)
+    runner = _runner(tmp_path, conversation_memory=memory)
+
+    remembered = runner.run(
+        AgentTask(
+            query="请记住,以后回答的前两个字必须先说你好",
+            session_id="s-policy",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            request_id="req-policy",
+        )
+    )
+    next_answer = runner.run(
+        AgentTask(
+            query="怎么保养尘盒",
+            session_id="s-next",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            request_id="req-next",
+        )
+    )
+
+    assert remembered.answer.startswith("你好")
+    assert remembered.state.steps == []
+    assert next_answer.answer.startswith("你好")
+    assert long_term.list_memories("tenant-a", "user-1")[0].key == "policy.response_prefix"
 
 
 def test_runner_does_not_commit_pending_or_failed_final_answers(tmp_path):

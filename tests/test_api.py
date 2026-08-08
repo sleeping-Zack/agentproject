@@ -101,3 +101,51 @@ def test_approval_api_requires_operator_and_matching_tenant(monkeypatch, tmp_pat
     )
     assert operator_approve.status_code == 200
     assert operator_approve.json()["decided_by"] == "operator:tenant-a"
+
+
+def test_operator_can_list_tenant_pending_approvals(monkeypatch, tmp_path):
+    approval_store = SQLiteApprovalStore(str(tmp_path / "approvals.db"))
+    expected = approval_store.create_pending(
+        request_id="req-list",
+        tenant_id="tenant-a",
+        principal_id="user-1",
+        user_role="user",
+        tool_name="fetch_external_data",
+        args={"user_id": "1002", "month": "2025-09"},
+        reason="cross-user report",
+    )
+    approval_store.create_pending(
+        request_id="req-other-tenant",
+        tenant_id="tenant-b",
+        principal_id="user-2",
+        user_role="user",
+        tool_name="fetch_external_data",
+        args={"user_id": "1003", "month": "2025-09"},
+        reason="cross-user report",
+    )
+    monkeypatch.setattr(server, "approval_store", approval_store)
+    client = TestClient(app)
+
+    user_response = client.get(
+        "/approvals",
+        headers={
+            "X-API-Key": "dev-api-key",
+            "X-Tenant-ID": "tenant-a",
+            "X-User-Role": "user",
+        },
+    )
+    operator_response = client.get(
+        "/approvals",
+        params={"status": "pending"},
+        headers={
+            "X-API-Key": "dev-api-key",
+            "X-Tenant-ID": "tenant-a",
+            "X-User-Role": "operator",
+        },
+    )
+
+    assert user_response.status_code == 403
+    assert operator_response.status_code == 200
+    assert [item["approval_id"] for item in operator_response.json()] == [
+        expected.approval_id
+    ]

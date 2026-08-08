@@ -1,0 +1,12 @@
+{"case_id":"memory-001","message":"请记住我的扫地机器人型号是 S10","expected":[{"key":"device.model","value":"S10","explicit":true}]}
+{"case_id":"memory-002","message":"请记住,以后回答的前两个字必须先说你好","expected":[{"key":"policy.response_prefix","value":"你好","explicit":true}]}
+{"case_id":"memory-003","message":"请记住我住在深圳；我喜欢简洁回答","expected":[{"key":"profile.city","value":"深圳","explicit":true},{"key":"preference.general","value":"简洁回答","explicit":true}]}
+{"case_id":"memory-004","message":"我家面积是 120 平方米","expected":[{"key":"profile.home_area","value":"120 平方米","explicit":false}]}
+{"case_id":"memory-005","message":"我的待处理事项是更换滤网","expected":[{"key":"open_item.current","value":"更换滤网","explicit":false}]}
+{"case_id":"memory-006","message":"请记住未经我确认不要生成使用报告","expected":[{"key":"safety.confirmation_required","value":"生成使用报告","explicit":true}]}
+{"case_id":"memory-007","message":"请更正我的扫地机器人型号为 S20","expected":[{"key":"device.model","value":"S20","explicit":true}]}
+{"case_id":"memory-008","message":"请记住我的密码是 123456","expected":[]}
+{"case_id":"memory-009","message":"请记住我的手机号是 13800138000","expected":[]}
+{"case_id":"memory-010","message":"请记住以后称呼我为老板","expected":[{"key":"policy.instruction.e1181dfa99f2","value":"称呼我为老板","explicit":true}]}
+{"case_id":"memory-011","message":"以后都要在回答中先给出明确结论","expected":[{"key":"policy.instruction.8a924c260e8c","value":"在回答中先给出明确结论","explicit":true}]}
+{"case_id":"memory-012","message":"这次请用表格回答","expected":[]}

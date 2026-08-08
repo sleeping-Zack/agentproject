@@ -45,6 +45,7 @@ class PolicyContext:
     scene: str
     tool: str
     args: Dict[str, Any] = field(default_factory=dict)
+    data_user_id: Optional[str] = None
 
     @property
     def user_role(self) -> str:
@@ -217,6 +218,7 @@ class ToolPolicy:
         tool_name: str,
         args: Dict[str, Any],
         principal_id: Optional[str] = None,
+        data_user_id: Optional[str] = None,
     ) -> PolicyDecision:
         if not isinstance(args, dict):
             raise TypeError("policy args must be a dictionary")
@@ -228,6 +230,7 @@ class ToolPolicy:
                 scene=scene,
                 tool=tool_name,
                 args=dict(args),
+                data_user_id=data_user_id,
             )
         )
 
@@ -324,6 +327,101 @@ class ToolPolicy:
                 redacted_args=redacted_args,
             ),
         )
+
+    def capability_manifest(
+        self,
+        *,
+        tenant_id: str,
+        user_role: str,
+        scene: str,
+        alternate_scenes: Iterable[str] = (),
+    ) -> List[Dict[str, Any]]:
+        """Return potentially usable tools without consuming limits or auditing.
+
+        Argument-constrained allow rules count as available because valid
+        arguments can satisfy them. Argument-constrained deny rules are not
+        treated as global denials; the real tool call still receives the full
+        policy evaluation.
+        """
+
+        now = self._now()
+        manifest: List[Dict[str, Any]] = []
+        scenes = tuple(dict.fromkeys((scene, *alternate_scenes)))
+        for spec in self.tool_registry.allowed_specs():
+            scene_actions = {
+                candidate_scene: self._capability_action(
+                    tenant_id=tenant_id,
+                    user_role=user_role,
+                    scene=candidate_scene,
+                    spec=spec,
+                    now=now,
+                )
+                for candidate_scene in scenes
+            }
+            usable = [
+                (candidate_scene, action)
+                for candidate_scene, action in scene_actions.items()
+                if action != PolicyAction.DENY
+            ]
+            if not usable:
+                continue
+            item = spec.as_manifest_item()
+            item["policy_action"] = usable[0][1].value
+            item["available_scenes"] = [
+                candidate_scene for candidate_scene, _action in usable
+            ]
+            manifest.append(item)
+        return manifest
+
+    def _capability_action(
+        self,
+        *,
+        tenant_id: str,
+        user_role: str,
+        scene: str,
+        spec: ToolSpec,
+        now: datetime,
+    ) -> PolicyAction:
+        selector_values = {
+            "tenants": tenant_id,
+            "roles": user_role,
+            "scenes": scene,
+            "tools": spec.name,
+        }
+        for rule in self._rules:
+            match = rule.get("match", {})
+            if any(
+                not self._matches_selector(match, selector, actual)
+                for selector, actual in selector_values.items()
+            ):
+                continue
+            if not self._matches_selector(match, "data_scopes", spec.scope):
+                continue
+            if not self._matches_selector(match, "risk_levels", spec.risk_level):
+                continue
+            window = match.get("time_window", rule.get("time_window"))
+            if not self._time_window_matches(window, now):
+                continue
+            configured_action = PolicyAction(
+                rule.get("action", PolicyAction.DENY.value)
+            )
+            constraints = match.get("argument_constraints")
+            if constraints and configured_action == PolicyAction.DENY:
+                continue
+            if constraints and configured_action == PolicyAction.ALLOW:
+                return (
+                    PolicyAction.NEED_APPROVAL
+                    if rule.get("requires_approval", spec.requires_approval)
+                    else PolicyAction.ALLOW
+                )
+            if configured_action != PolicyAction.ALLOW:
+                return configured_action
+            return (
+                PolicyAction.NEED_APPROVAL
+                if rule.get("requires_approval", spec.requires_approval)
+                else PolicyAction.ALLOW
+            )
+        return PolicyAction.DENY
 
     @staticmethod
     def _load_config(path: Path) -> Dict[str, Any]:
@@ -422,6 +520,7 @@ class ToolPolicy:
                 if "equals_context" in condition and condition["equals_context"] not in {
                     "tenant_id",
                     "principal_id",
+                    "data_user_id",
                     "role",
                     "scene",
                     "tool",
@@ -510,6 +609,7 @@ class ToolPolicy:
         context_values = {
             "tenant_id": context.tenant_id,
             "principal_id": context.principal_id,
+            "data_user_id": context.data_user_id,
             "role": context.role,
             "scene": context.scene,
             "tool": context.tool,
@@ -711,14 +811,44 @@ class PlanValidator:
             missing = [dep for dep in task.depends_on if dep not in known_ids]
             if missing:
                 errors.append(f"missing_dependency:{task.id}:{','.join(missing)}")
+        dependencies = {task.id: set(task.depends_on) for task in tasks}
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def has_cycle(task_id: str) -> bool:
+            if task_id in visiting:
+                return True
+            if task_id in visited:
+                return False
+            visiting.add(task_id)
+            for dependency in dependencies.get(task_id, set()):
+                if dependency in dependencies and has_cycle(dependency):
+                    return True
+            visiting.remove(task_id)
+            visited.add(task_id)
+            return False
+
+        if any(has_cycle(task_id) for task_id in dependencies):
+            errors.append("dependency_cycle")
         return ValidationResult(valid=not errors, errors=errors)
 
 
 class Replanner:
     def replan(self, query: str, failed_task: SubTask, failure_reason: str) -> List[SubTask]:
+        non_retriable_prefixes = (
+            "dependency_failed:",
+            "subtask_verification_failed:",
+            "max_steps_exceeded",
+            "max_tool_calls_exceeded",
+            "max_tokens_exceeded",
+            "max_cost_exceeded",
+            "deadline_exceeded",
+        )
+        if failure_reason.startswith(non_retriable_prefixes):
+            return []
         return [
             SubTask(
-                id="fallback-1",
+                id=f"fallback-{failed_task.id}",
                 kind="generic",
                 description=(
                     "原计划失败后走默认回答，"

@@ -44,17 +44,31 @@ Copy-Item .env.example .env
 python -m rag.vector_store
 ```
 
-启动 Streamlit 演示：
+本地开发统一使用固定端口（FastAPI `8000`、Streamlit `8501`）。启动或修改代码后重启：
 
 ```powershell
-streamlit run app.py
+.\scripts\dev.ps1 restart
 ```
 
-启动 FastAPI 服务：
+脚本会停止本项目已有的前后端进程，在原端口启动当前代码并完成健康检查。也可单独启停或查看状态：
 
 ```powershell
-uvicorn api.server:app --host 0.0.0.0 --port 8000
+.\scripts\dev.ps1 start
+.\scripts\dev.ps1 stop
+.\scripts\dev.ps1 status
 ```
+
+Streamlit 不再直接实例化 Agent；聊天、长期记忆、Planner、审批、artifact、trace
+和 metrics 全部通过 FastAPI。生产身份来自服务端绑定的 API Key principal 或经过
+HS256 校验的 JWT claims；侧边栏中的 Tenant/User 只能与认证身份一致，不能用于冒充身份。
+
+也可以一次启动完整后端与前端：
+
+```powershell
+docker compose up --build
+```
+
+随后访问 `http://127.0.0.1:8501`。
 
 启动 MCP stdio server：
 
@@ -69,10 +83,21 @@ python mcp_server.py
 | 接口 | 作用 |
 |---|---|
 | `GET /health` | 健康检查 |
+| `GET /auth/me` | 校验当前认证身份及 tenant/user/role 绑定 |
 | `GET /tools/manifest` | 导出工具 manifest |
+| `GET /sessions` | 按 tenant/user 查询可恢复的历史会话 |
+| `GET /sessions/{session_id}/messages` | 恢复指定用户会话的短期消息 |
+| `GET /memory` | 查询当前 tenant/user 的长期事实及衰减分数 |
+| `GET /memory/events` | 查询当前用户的情景记忆 |
+| `GET /memory/summaries` | 查询当前用户的会话压缩摘要 |
+| `GET /memory/procedures` | 查询租户可用的已认证程序记忆 |
+| `POST /memory` | 显式新增或版本化更正长期记忆 |
+| `DELETE /memory` | 遗忘指定记忆或全部用户记忆 |
+| `POST /memory/{memory_id}/review` | 接受或拒绝自动冲突形成的待确认记忆 |
 | `POST /chat` | 兼容聊天入口，内部走 Harness |
 | `POST /chat/stream` | 实时 SSE 事件流，支持 token、工具、审批、验证、artifact、心跳与重连重放 |
 | `POST /harness/run` | 推荐生产入口，返回 status / approval_id / verifier / artifacts |
+| `GET /approvals` | 查询当前租户审批队列，仅 operator / admin |
 | `GET /approvals/{approval_id}` | 查询审批记录 |
 | `POST /approvals/{approval_id}/approve` | 审批通过，仅 operator / admin |
 | `POST /approvals/{approval_id}/deny` | 审批拒绝，仅 operator / admin |
@@ -92,7 +117,18 @@ python mcp_server.py
 - `/chat` 保留兼容旧调用方，但内部已经调用 `AgentRunner`，不会绕过审批、artifact、trace 和 verifier。
 - `/chat/stream` 统一输出 `AgentEvent`；客户端可携带同一 `request_id` 与 `Last-Event-ID` 恢复遗漏事件，跨租户、跨会话或不同 query 复用 request_id 会被拒绝。
 - `/mcp tools/call` 由 `MCPToolServer` 执行 ToolPolicy；调用 `fetch_external_data` 等敏感工具时会返回 `pending_approval` 和 `approval_id`，审批通过且参数匹配后才执行。
-- `user_role` 不信任 request body，服务端从 `X-User-Role` 等 auth header 中解析；`approve/deny` 需要 `operator` 或 `admin`。
+- `tenant_id / user_id / role` 由 API Key 或 JWT 的服务端 claims 决定。前端不发送可伪造的身份请求头，也不提供客户端角色提权。
+- `principal_id` 是登录主体，`data_user_id` 是该主体拥有的使用记录标识。本人单月只读报告免审；跨用户报告进入审批，并把申请人、目标用户和月份绑定到审批记录。
+- `/chat`、`/chat/stream` 和 `/harness/run` 都接受 `approval_id`。批准后必须由原申请身份以相同参数继续请求；跨身份或改参数复用审批会被拒绝。
+- 本地开发可分别配置 `AGENT_OPERATOR_API_KEY` 和 `AGENT_ADMIN_API_KEY`；生产应使用 `AGENT_API_PRINCIPALS_JSON` 或 JWT/外部身份提供方。
+
+长期记忆采用“候选—校验—版本化—使用”四段式链路：
+
+- 高精度规则只作为低延迟兜底；默认启用结构化模型抽取，覆盖开放表达的用户画像、偏好和长期行为要求。
+- 模型不能直接写库。候选必须带稳定语义槽位、作用域、长期有效性、置信度和可在原文定位的证据，再经过敏感数据与 schema 校验。
+- 显式更正会形成新版本；自动抽取与现有事实冲突时进入 `pending_confirmation`，不会静默覆盖。
+- 模糊遗忘请求拒绝猜测；全局用户策略和偏好每轮注入用户级约束上下文，当前请求及系统/安全规则始终优先。
+- `AGENT_MEMORY_MODEL_EXTRACTION_ENABLED=false` 可关闭模型抽取，系统仍保留保守规则路径，但开放表达的召回率会下降。
 
 ---
 
@@ -104,7 +140,7 @@ flowchart TB
     User --> FastAPI["FastAPI 服务\napi/server.py"]
     User --> MCPClient["MCP Client"]
 
-    Streamlit --> ReactAgent["ReactAgent\nReAct 执行面"]
+    Streamlit -->|HTTP / SSE| FastAPI
 
     FastAPI --> Auth["API Key 鉴权\nresolve_auth_context"]
     Auth --> Tenant["tenant / role / principal\n可信上下文"]
@@ -146,6 +182,9 @@ flowchart TB
 
     ReactAgent --> Memory["ConversationMemory"]
     Memory --> SessionDB["SQLiteStore\nsession_messages"]
+    Memory --> LongTerm["LongTermMemoryService\n情景 / 语义 / 程序记忆"]
+    LongTerm --> MemoryDB["SQLite / Postgres\n权威记忆存储"]
+    LongTerm --> MemoryVector["可选 Chroma\n候选索引"]
 
     FastAPI --> Trace["TraceRecorder"]
     Trace --> TraceDB["SQLiteStore\ntraces"]
@@ -175,11 +214,12 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    Req["HTTP 请求"] --> APIKey["X-API-Key\n基础鉴权"]
-    APIKey --> AuthCtx["resolve_auth_context"]
-    AuthCtx --> Tenant["tenant_id\nX-Tenant-ID 或 body tenant_id"]
-    AuthCtx --> Role["user_role\nX-User-Role"]
-    AuthCtx --> Principal["principal_id\nX-Principal-ID"]
+    Req["HTTP 请求"] --> Auth["绑定 principal 的 API Key\n或 HS256 JWT"]
+    Auth --> AuthCtx["resolve_auth_context"]
+    AuthCtx --> Tenant["tenant_id\n服务端 claims"]
+    AuthCtx --> Role["user_role\n服务端 claims"]
+    AuthCtx --> Principal["principal_id\nsub / user_id"]
+    Req -. "Header/body 仅作一致性校验" .-> AuthCtx
     Role --> Validate["VALID_ROLES\nuser / operator / admin"]
     Validate --> Rate["RateLimiter"]
     Rate --> Safe["assert_safe_user_input"]
@@ -188,9 +228,10 @@ flowchart LR
 
 说明：
 
-- `X-API-Key` 只负责基础 API 鉴权。
-- `AuthContext` 统一解析 `tenant_id`、`user_role`、`principal_id`。
-- `user_role` 不从 request body 中信任读取；生产环境应替换成 API Key / JWT claims。
+- 默认 `principal_api_key` 模式把 API Key 映射到服务端 tenant/user/role。
+- `jwt` 模式校验 HS256 签名、`exp`、可选 issuer/audience，并从 claims 读取身份。
+- `X-Tenant-ID`、`X-Principal-ID`、`X-User-Role` 仅用于与认证身份做一致性校验。
+- `legacy_headers` 只供旧测试或短期迁移，生产环境不得启用。
 - `operator` 和 `admin` 属于审批角色，可调用 approve / deny。
 - 请求进入 Harness 前仍会经过限流和 Prompt Injection 检测。
 
@@ -613,7 +654,7 @@ flowchart LR
     Memory --> Store["SessionStore 协议"]
     Store --> SQLite["SQLiteStore"]
 
-    SQLite --> SessionTable["session_messages\ntenant_id + session_id + role + content"]
+    SQLite --> SessionTable["session_messages\ntenant_id + user_id + session_id + role + content"]
     SQLite --> TraceTable["traces\nrequest_id + session_id + tenant_id + payload"]
 
     Runner["AgentRunner"] --> ArtifactStore["SQLiteArtifactStore"]
@@ -630,6 +671,15 @@ flowchart LR
 | `SQLiteStore` | session messages 与 traces |
 | `SQLiteApprovalStore` | pending / approved / denied 审批记录 |
 | `SQLiteArtifactStore` | final answer、verification failure、evidence、tool_results 等产物 |
+
+长期记忆的关键约束：
+
+- 显式“记住/更正/忘记”在模型生成回答前同步执行，回复中的成功承诺来自真实写入结果。
+- 用户行为要求使用结构化 `user_policy`；例如回答前缀由输出策略执行器确定性应用。
+- 普通自动提取支持白名单内的多事实，但不会绕过敏感信息检测或覆盖已确认冲突。
+- 召回同时要求最低相关度、最低总分和非陈旧状态；无关记忆返回空集合。
+- 摘要主键为 `(tenant_id, user_id, session_id)`，并保存来源消息标识及摘要校验摘要。
+- 软衰减把低于阈值的事实标记为 `stale`，物理删除仍由独立 retention/forget 流程处理。
 
 ---
 

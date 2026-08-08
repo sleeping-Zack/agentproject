@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 import api.server as server
 from agent.react_agent import ReactAgent
@@ -58,6 +59,33 @@ def test_runner_streams_tokens_before_terminal_event(tmp_path):
         event_bus.discard(task.request_id)
 
 
+def test_runner_publishes_verified_answer_for_deferred_backend(tmp_path):
+    class Backend:
+        defers_answer_tokens = True
+
+        def __call__(self, _task, _state):
+            return AgentBackendResult(answer="最终答案")
+
+    runner = _runner(tmp_path, Backend())
+    task = AgentTask(query="stream", request_id=str(uuid4()))
+
+    async def collect():
+        return [event async for event in runner.run_stream(task)]
+
+    try:
+        events = asyncio.run(collect())
+        answer_events = [event for event in events if event.event_type == "token_delta"]
+        assert len(answer_events) == 1
+        assert answer_events[0].payload == {
+            "delta": "最终答案",
+            "provisional": False,
+            "replace": True,
+        }
+        assert events.index(answer_events[0]) < len(events) - 1
+    finally:
+        event_bus.discard(task.request_id)
+
+
 def test_runner_emits_heartbeat_while_backend_is_idle(tmp_path):
     class SlowBackend:
         def __call__(self, _task, _state):
@@ -94,7 +122,7 @@ def test_event_bus_atomically_binds_stream_identity():
         )
 
 
-def test_react_agent_publishes_each_model_chunk():
+def test_react_agent_publishes_only_final_model_answer():
     request_id = str(uuid4())
     react_agent = ReactAgent.__new__(ReactAgent)
     react_agent.memory = SimpleNamespace(get_messages=lambda *_args, **_kwargs: [])
@@ -103,11 +131,56 @@ def test_react_agent_publishes_each_model_chunk():
         def stream(self, *_args, **_kwargs):
             yield {
                 "type": "messages",
-                "data": (SimpleNamespace(text="A", content="A"), {}),
+                "data": (AIMessageChunk(content="我先查询知识库。"), {}),
+            }
+            yield {
+                "type": "updates",
+                "data": {
+                    "model": {
+                        "messages": [
+                            AIMessage(
+                                content="我先查询知识库。",
+                                tool_calls=[
+                                    {
+                                        "name": "rag_summarize",
+                                        "args": {"query": "扫地机器人优缺点"},
+                                        "id": "call-1",
+                                        "type": "tool_call",
+                                    }
+                                ],
+                            )
+                        ]
+                    }
+                },
+            }
+            yield {
+                "type": "updates",
+                "data": {
+                    "tools": {
+                        "messages": [
+                            ToolMessage(
+                                content="参考资料",
+                                tool_call_id="call-1",
+                            )
+                        ]
+                    }
+                },
             }
             yield {
                 "type": "messages",
-                "data": (SimpleNamespace(text="B", content="B"), {}),
+                "data": (AIMessageChunk(content="优点明确，"), {}),
+            }
+            yield {
+                "type": "messages",
+                "data": (AIMessageChunk(content="缺点也明确。"), {}),
+            }
+            yield {
+                "type": "updates",
+                "data": {
+                    "model": {
+                        "messages": [AIMessage(content="优点明确，缺点也明确。")]
+                    }
+                },
             }
 
     react_agent.agent = StreamStub()
@@ -122,8 +195,12 @@ def test_react_agent_publishes_each_model_chunk():
             )
         )
         events = event_bus.replay(request_id)
-        assert chunks == ["A", "AB"]
-        assert [event.payload["delta"] for event in events] == ["A", "B"]
+        assert chunks == ["优点明确，缺点也明确。"]
+        assert [event.payload["delta"] for event in events] == [
+            "优点明确，缺点也明确。"
+        ]
+        assert events[0].payload["provisional"] is False
+        assert events[0].payload["replace"] is True
     finally:
         event_bus.discard(request_id)
 

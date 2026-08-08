@@ -107,3 +107,78 @@ def test_sqlite_store_migrates_legacy_null_request_ids():
             row[1] == "idx_session_message_idempotency" and row[2] == 1
             for row in index_rows
         )
+
+
+def test_sqlite_store_lists_and_loads_sessions_by_stable_user():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SQLiteStore(os.path.join(tmp, "agent.db"))
+        store.save_session_message(
+            "session-a", "user", "我的问题", tenant_id="tenant-a",
+            user_id="user-1", request_id="request-a",
+        )
+        store.save_session_message(
+            "session-a", "assistant", "回答", tenant_id="tenant-a",
+            user_id="user-1", request_id="request-a",
+        )
+        store.save_session_message(
+            "session-b", "user", "其他用户", tenant_id="tenant-a",
+            user_id="user-2", request_id="request-b",
+        )
+
+        sessions = store.list_sessions("tenant-a", "user-1")
+
+        assert [(item["session_id"], item["message_count"], item["title"]) for item in sessions] == [
+            ("session-a", 2, "我的问题")
+        ]
+        assert store.get_session_messages(
+            "session-a", tenant_id="tenant-a", user_id="user-1"
+        ) == [
+            {"role": "user", "content": "我的问题"},
+            {"role": "assistant", "content": "回答"},
+        ]
+        assert store.get_session_messages(
+            "session-a", tenant_id="tenant-a", user_id="user-2"
+        ) == []
+
+
+def test_sqlite_store_protocol_decodes_tenant_user_session_key():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SQLiteStore(os.path.join(tmp, "agent.db"))
+
+        store.append_message(
+            "tenant-a|user-1|session-a", "user", "hello", request_id="request-a",
+            user_id="user-1",
+        )
+
+        assert store.load_messages("tenant-a|user-1|session-a") == [
+            {"role": "user", "content": "hello"}
+        ]
+
+
+def test_same_tenant_session_and_request_are_isolated_by_user():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SQLiteStore(os.path.join(tmp, "agent.db"))
+
+        assert store.save_session_message(
+            "same-session",
+            "user",
+            "user one",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            request_id="same-request",
+        )
+        assert store.save_session_message(
+            "same-session",
+            "user",
+            "user two",
+            tenant_id="tenant-a",
+            user_id="user-2",
+            request_id="same-request",
+        )
+
+        assert store.get_session_messages(
+            "same-session", tenant_id="tenant-a", user_id="user-1"
+        )[0]["content"] == "user one"
+        assert store.get_session_messages(
+            "same-session", tenant_id="tenant-a", user_id="user-2"
+        )[0]["content"] == "user two"

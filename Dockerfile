@@ -8,6 +8,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY agent ./agent
 COPY api ./api
+COPY app.py ./
 COPY config ./config
 COPY data ./data
 COPY mcp_adapter ./mcp_adapter

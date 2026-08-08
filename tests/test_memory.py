@@ -1,5 +1,7 @@
 from agent.memory import ConversationMemory, InMemorySessionStore
-from agent.long_term_memory import LongTermMemoryService
+import sqlite3
+
+from agent.long_term_memory import LongTermMemoryService, MemoryCategory
 from services.memory_store import SQLiteMemoryStore
 from services.persistence import SQLiteStore
 
@@ -175,6 +177,40 @@ def test_context_uses_token_budget_and_includes_recalled_user_memory(tmp_path):
     assert context[-1] == {"role": "assistant", "content": "最近回答"}
 
 
+def test_context_always_includes_global_user_policies_and_preferences(tmp_path):
+    long_term = LongTermMemoryService(SQLiteMemoryStore(str(tmp_path / "memory.db")))
+    long_term.remember(
+        "tenant-a",
+        "user-1",
+        "policy.response.citations",
+        "涉及事实时附带来源",
+        MemoryCategory.USER_POLICY,
+        metadata={"scope": "global", "source": "semantic_model"},
+    )
+    long_term.remember(
+        "tenant-a",
+        "user-1",
+        "preference.response.detail",
+        "先给结论，再给必要细节",
+        MemoryCategory.USER_PREFERENCE,
+        metadata={"scope": "global", "source": "semantic_model"},
+    )
+    memory = ConversationMemory(long_term_memory=long_term)
+
+    context = memory.build_context(
+        "session-1",
+        "帮我分析这个故障",
+        tenant_id="tenant-a",
+        user_id="user-1",
+    )
+
+    assert context[-1]["role"] == "user"
+    assert "长期偏好与行为要求" in context[-1]["content"]
+    assert "涉及事实时附带来源" in context[-1]["content"]
+    assert "先给结论，再给必要细节" in context[-1]["content"]
+    assert "下一条请求" in context[-1]["content"]
+
+
 def test_forget_physically_removes_sources_and_invalidates_conversation_cache(tmp_path):
     db_path = str(tmp_path / "memory.db")
     session_store = SQLiteStore(db_path)
@@ -194,9 +230,68 @@ def test_forget_physically_removes_sources_and_invalidates_conversation_cache(tm
         tenant_id="tenant-a",
         user_id="user-1",
     )
-    assert len(memory.get_messages("session-1", tenant_id="tenant-a")) == 2
+    assert len(
+        memory.get_messages(
+            "session-1", tenant_id="tenant-a", user_id="user-1"
+        )
+    ) == 2
 
     long_term.forget("tenant-a", "user-1", key="device.model")
 
-    assert memory.get_messages("session-1", tenant_id="tenant-a") == []
+    assert memory.get_messages(
+        "session-1", tenant_id="tenant-a", user_id="user-1"
+    ) == []
     assert long_term.list_memories("tenant-a", "user-1", include_inactive=True) == []
+
+
+def test_persisted_summary_tracks_sources_and_is_rejected_after_source_change(tmp_path):
+    db_path = str(tmp_path / "memory.db")
+    session_store = SQLiteStore(db_path)
+    summary_store = SQLiteMemoryStore(db_path)
+    memory = ConversationMemory(
+        max_messages=10,
+        store=session_store,
+        summarizer=lambda messages, previous: "可靠摘要",
+        summary_trigger=4,
+        summary_keep_recent=2,
+        summary_store=summary_store,
+    )
+    for index in range(3):
+        memory.add_message(
+            "session-1",
+            "user",
+            f"问题{index}",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            request_id=f"request-{index}",
+        )
+        memory.add_message(
+            "session-1",
+            "assistant",
+            f"回答{index}",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            request_id=f"request-{index}",
+        )
+
+    persisted = summary_store.load_summary("tenant-a", "user-1", "session-1")
+    assert persisted["source_message_ids"]
+    assert persisted["source_digest"]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM session_messages WHERE id = "
+            "(SELECT MIN(id) FROM session_messages)"
+        )
+    fresh = ConversationMemory(
+        max_messages=10,
+        store=SQLiteStore(db_path),
+        summarizer=lambda messages, previous: "不应调用",
+        summary_trigger=40,
+        summary_store=SQLiteMemoryStore(db_path),
+    )
+
+    messages = fresh.get_messages(
+        "session-1", tenant_id="tenant-a", user_id="user-1"
+    )
+    assert all(message["role"] != "system" for message in messages)

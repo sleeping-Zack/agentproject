@@ -18,6 +18,7 @@ class ApprovalRecord:
     tool_name: str
     args: Dict[str, Any]
     reason: str
+    principal_id: str = ""
     status: str = "pending"
     created_at: str = ""
     decided_at: Optional[str] = None

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from difflib import SequenceMatcher
 from typing import Any, Callable
 
 from utils.prompt_loader import load_system_prompts, load_report_prompts
@@ -41,6 +44,27 @@ default_retry_policy = RetryPolicy(
 )
 TOOL_BREAKER_FAILURE_THRESHOLD = int(agent_conf.get("tool_breaker_failure_threshold", 5))
 TOOL_BREAKER_RECOVERY_TIMEOUT = float(agent_conf.get("tool_breaker_recovery_timeout", 30.0))
+TOOL_RESULT_PREVIEW_CHARS = 4000
+
+
+def _tool_result_event_payload(result: ToolMessage | Command) -> dict:
+    """Return a bounded, redacted tool result suitable for the audit event stream."""
+    content = getattr(result, "content", None)
+    if content is None:
+        return {
+            "result": "工具已完成状态更新，没有可展示的文本结果。",
+            "result_truncated": False,
+        }
+    safe_content = redact_sensitive(content)
+    if isinstance(safe_content, str):
+        text = safe_content.strip()
+    else:
+        text = json.dumps(safe_content, ensure_ascii=False, default=str)
+    text = text or "（空结果）"
+    truncated = len(text) > TOOL_RESULT_PREVIEW_CHARS
+    if truncated:
+        text = text[:TOOL_RESULT_PREVIEW_CHARS].rstrip() + "…"
+    return {"result": text, "result_truncated": truncated}
 
 
 @wrap_tool_call
@@ -67,6 +91,8 @@ def monitor_tool(
 
     request_id = request.runtime.context.get("request_id")
     tenant_id = request.runtime.context.get("tenant_id", "default")
+    principal_id = request.runtime.context.get("user_id")
+    data_user_id = request.runtime.context.get("data_user_id")
     user_role = request.runtime.context.get("user_role", "user")
     scene = request.runtime.context.get("scene", "default")
     approval_id = request.runtime.context.get("approval_id")
@@ -107,6 +133,8 @@ def monitor_tool(
         tool_call_id=request.tool_call.get("id", ""),
         request_id=request_id,
         tenant_id=tenant_id,
+        principal_id=principal_id,
+        data_user_id=data_user_id,
         user_role=user_role,
         scene=scene,
         approval_id=approval_id,
@@ -134,6 +162,27 @@ def monitor_tool(
             tool_call_id=request.tool_call.get("id", ""),
             name=tool_name,
         )
+
+    duplicate_rag = _authorize_rag_call(
+        request.runtime.context,
+        tool_name,
+        tool_args,
+        request.tool_call.get("id", ""),
+        budget_manager,
+    )
+    if duplicate_rag is not None:
+        metrics_registry.inc_tool_call(tool_name, status="duplicate_blocked")
+        _publish_tool_event(
+            request_id,
+            emit_events,
+            "tool_skipped",
+            {
+                "tool": tool_name,
+                "status": "duplicate_blocked",
+                **_tool_result_event_payload(duplicate_rag),
+            },
+        )
+        return duplicate_rag
 
     def _invoke():
         reservation: Reservation | None = None
@@ -181,7 +230,12 @@ def monitor_tool(
             request_id,
             emit_events,
             "tool_completed",
-            {"tool": tool_name, "status": "cache_hit", "duration_ms": 0.0},
+            {
+                "tool": tool_name,
+                "status": "cache_hit",
+                "duration_ms": 0.0,
+                **_tool_result_event_payload(cached),
+            },
         )
         return cached
 
@@ -199,7 +253,12 @@ def monitor_tool(
             request_id,
             emit_events,
             "tool_completed",
-            {"tool": tool_name, "status": "success", "duration_ms": round(elapsed, 2)},
+            {
+                "tool": tool_name,
+                "status": "success",
+                "duration_ms": round(elapsed, 2),
+                **_tool_result_event_payload(result),
+            },
         )
         # 只缓存成功的 ToolMessage；Command 类型有副作用不缓存
         if isinstance(result, ToolMessage):
@@ -297,6 +356,123 @@ def _enforce_tool_budget(
     return None
 
 
+def _authorize_rag_call(
+    runtime_context: dict,
+    tool_name: str,
+    tool_args: dict,
+    tool_call_id: str,
+    budget_manager: BudgetManager | None = None,
+) -> ToolMessage | None:
+    """Bound RAG loops by novelty, an explicit information gap, and budget."""
+
+    if tool_name != "rag_summarize":
+        return None
+    if runtime_context.get("rag_loop_closed"):
+        return ToolMessage(
+            content="检索循环已经结束。请立即基于已有资料生成最终回答。",
+            tool_call_id=tool_call_id,
+            name=tool_name,
+        )
+
+    reserve = int(runtime_context.get("final_response_token_reserve", 4500))
+    if budget_manager is not None and budget_manager.remaining_tokens <= reserve:
+        runtime_context["rag_loop_closed"] = True
+        return ToolMessage(
+            content=(
+                "剩余 Token 必须保留为最终回答预算，已停止继续检索。"
+                "请基于已有资料简洁作答。"
+            ),
+            tool_call_id=tool_call_id,
+            name=tool_name,
+        )
+
+    history = runtime_context.setdefault("rag_query_history", [])
+    max_rag_calls = int(runtime_context.get("max_rag_calls", 3))
+    if len(history) >= max_rag_calls:
+        runtime_context["rag_loop_closed"] = True
+        return ToolMessage(
+            content=(
+                f"已达到 {max_rag_calls} 次知识库检索上限。"
+                "请基于已有资料生成最终回答。"
+            ),
+            tool_call_id=tool_call_id,
+            name=tool_name,
+        )
+
+    query = str(tool_args.get("query", "")).strip()
+    information_gap = str(tool_args.get("information_gap", "")).strip()
+    if not information_gap:
+        return ToolMessage(
+            content=(
+                "每次检索都必须提供 information_gap：首次说明为什么需要知识库证据，"
+                "后续说明已有资料尚未覆盖的独立缺口。"
+            ),
+            tool_call_id=tool_call_id,
+            name=tool_name,
+        )
+
+    query_key = _semantic_query_key(query)
+    duplicate_threshold = float(runtime_context.get("rag_duplicate_threshold", 0.55))
+    for previous in history:
+        similarity = SequenceMatcher(
+            None,
+            query_key,
+            str(previous["semantic_key"]),
+        ).ratio()
+        if similarity >= duplicate_threshold:
+            runtime_context["rag_loop_closed"] = True
+            return ToolMessage(
+                content=(
+                    f"新检索与已有检索语义重复（相似度 {similarity:.2f}），已停止检索。"
+                    "请基于已有资料生成去重后的最终回答。"
+                ),
+                tool_call_id=tool_call_id,
+                name=tool_name,
+            )
+
+    history.append(
+        {
+            "query": query,
+            "information_gap": information_gap,
+            "semantic_key": query_key,
+        }
+    )
+    return None
+
+
+def _semantic_query_key(query: str) -> str:
+    normalized = query.lower()
+    replacements = {
+        "优缺点": "优点缺点",
+        "优势": "优点",
+        "好处": "优点",
+        "长处": "优点",
+        "不足": "缺点",
+        "局限性": "缺点",
+        "局限": "缺点",
+        "短板": "缺点",
+        "功能特点": "功能",
+    }
+    for source, target in replacements.items():
+        normalized = normalized.replace(source, target)
+    for boilerplate in (
+        "智能扫地机器人",
+        "扫地机器人",
+        "扫拖一体机器人",
+        "扫拖一体机",
+        "机器人",
+        "相关",
+        "方面",
+        "以及",
+        "使用",
+        "的",
+        "和",
+        "与",
+    ):
+        normalized = normalized.replace(boilerplate, "")
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", normalized)
+
+
 def _get_budget_manager(runtime_context: Any) -> BudgetManager | None:
     if not hasattr(runtime_context, "get"):
         return None
@@ -318,6 +494,8 @@ def _enforce_tool_policy(
     tool_call_id: str,
     request_id: str | None,
     tenant_id: str,
+    principal_id: str | None,
+    data_user_id: str | None,
     user_role: str,
     scene: str,
     approval_id: str | None,
@@ -325,6 +503,8 @@ def _enforce_tool_policy(
 ) -> ToolMessage | None:
     decision = tool_policy.decide(
         tenant_id=tenant_id,
+        principal_id=principal_id,
+        data_user_id=data_user_id,
         user_role=user_role,
         scene=scene,
         tool_name=tool_name,
@@ -373,6 +553,18 @@ def _enforce_tool_policy(
                 tool_call_id=tool_call_id,
                 name=tool_name,
             )
+        if approval.principal_id and approval.principal_id != (principal_id or ""):
+            return ToolMessage(
+                content="敏感工具审批记录不属于当前用户，已拒绝执行。",
+                tool_call_id=tool_call_id,
+                name=tool_name,
+            )
+        if approval.args != tool_args:
+            return ToolMessage(
+                content="敏感工具审批记录与当前调用参数不匹配，已拒绝执行。",
+                tool_call_id=tool_call_id,
+                name=tool_name,
+            )
         if approval.is_approved:
             return None
         if approval.is_denied:
@@ -395,6 +587,7 @@ def _enforce_tool_policy(
             tool_name=tool_name,
             args=tool_args,
             reason=decision.reason,
+            principal_id=principal_id or "",
         )
         _publish_tool_event(
             request_id,
@@ -533,11 +726,14 @@ def _configured_max_output_tokens(request: ModelRequest) -> int:
 
 
 def _estimate_message_tokens(messages: list[Any]) -> int:
-    characters = 0
+    tokens = 0
     for message in messages:
         content = getattr(message, "content", message)
-        characters += len(str(content))
-    return max(1, (characters + 3) // 4)
+        text = str(content)
+        non_ascii = sum(1 for character in text if ord(character) > 127)
+        ascii_characters = len(text) - non_ascii
+        tokens += non_ascii + ((ascii_characters + 3) // 4)
+    return max(1, tokens)
 
 
 def _response_messages(response: Any) -> list[Any]:

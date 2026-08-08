@@ -37,6 +37,27 @@ rules:
     reason_code: report_data_admin
     reason: allowed
 
+  - id: report-data-self
+    priority: 250
+    match:
+      tenants: ["*"]
+      roles: [user]
+      scenes: [report, monthly_report]
+      tools: [fetch_external_data]
+      data_scopes: [usage_record:read]
+      risk_levels: [medium]
+      argument_constraints:
+        required: [user_id, month]
+        fields:
+          user_id:
+            equals_context: data_user_id
+          month:
+            regex: "^20[0-9]{2}-(0[1-9]|1[0-2])$"
+    action: allow
+    requires_approval: false
+    reason_code: report_data_self
+    reason: authenticated user may read their own single-month usage record
+
   - id: report-data-user-approval
     priority: 200
     match:

@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import Runtime
 
 from agent.budget import BudgetExceeded, BudgetManager
-from agent.tools.middleware import enforce_model_budget
+from agent.tools.middleware import _estimate_message_tokens, enforce_model_budget
 
 
 def _request(manager, *, max_output=100):
@@ -70,3 +70,11 @@ def test_model_middleware_cache_hit_does_not_charge_tokens():
     snapshot = manager.snapshot()
     assert snapshot["used_tokens"] == 0
     assert snapshot["model_cache_hits"] == 1
+
+
+def test_message_token_estimate_accounts_for_cjk_characters():
+    chinese = _estimate_message_tokens([HumanMessage(content="扫" * 100)])
+    ascii_text = _estimate_message_tokens([HumanMessage(content="a" * 100)])
+
+    assert chinese >= 100
+    assert ascii_text == 25

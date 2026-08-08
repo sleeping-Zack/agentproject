@@ -60,13 +60,18 @@ def test_chat_stream_endpoint_uses_harness_runner(monkeypatch):
         "POST",
         "/chat/stream",
         headers={"X-API-Key": "dev-api-key", "X-Tenant-ID": "tenant-entry"},
-        json={"message": "怎么保养滤网", "session_id": "entry-stream"},
+        json={
+            "message": "怎么保养滤网",
+            "session_id": "entry-stream",
+            "approval_id": "approval-1",
+        },
     ) as response:
         body = "".join(response.iter_text())
 
     assert response.status_code == 200
     assert "harness answer" in body
     assert fake_runner.calls
+    assert fake_runner.calls[0].approval_id == "approval-1"
 
 
 def _persistent_runner(tmp_path, message_store):

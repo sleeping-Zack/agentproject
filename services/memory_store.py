@@ -97,12 +97,15 @@ class SQLiteMemoryStore:
                 );
                 CREATE TABLE IF NOT EXISTS memory_summaries (
                     tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
                     session_id TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     covered_message_count INTEGER NOT NULL,
                     version TEXT NOT NULL,
+                    source_message_ids TEXT NOT NULL DEFAULT '[]',
+                    source_digest TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL,
-                    PRIMARY KEY(tenant_id, session_id)
+                    PRIMARY KEY(tenant_id, user_id, session_id)
                 );
                 CREATE TABLE IF NOT EXISTS memory_access_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +129,49 @@ class SQLiteMemoryStore:
                 );
                 """
             )
+            self._migrate_summaries(conn)
+
+    @staticmethod
+    def _migrate_summaries(conn) -> None:
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(memory_summaries)")
+        }
+        if "user_id" not in columns:
+            conn.execute("ALTER TABLE memory_summaries RENAME TO memory_summaries_legacy")
+            conn.execute(
+                "CREATE TABLE memory_summaries ("
+                "tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, session_id TEXT NOT NULL, "
+                "summary TEXT NOT NULL, covered_message_count INTEGER NOT NULL, "
+                "version TEXT NOT NULL, source_message_ids TEXT NOT NULL DEFAULT '[]', "
+                "source_digest TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL, "
+                "PRIMARY KEY(tenant_id, user_id, session_id))"
+            )
+            conn.execute(
+                "INSERT INTO memory_summaries("
+                "tenant_id, user_id, session_id, summary, covered_message_count, version, "
+                "source_message_ids, source_digest, updated_at) "
+                "SELECT legacy.tenant_id, COALESCE(("
+                "SELECT MIN(events.user_id) FROM memory_events events "
+                "WHERE events.tenant_id = legacy.tenant_id "
+                "AND events.session_id = legacy.session_id "
+                "GROUP BY events.tenant_id, events.session_id "
+                "HAVING COUNT(DISTINCT events.user_id) = 1), ''), "
+                "legacy.session_id, legacy.summary, legacy.covered_message_count, "
+                "legacy.version, '[]', '', legacy.updated_at "
+                "FROM memory_summaries_legacy legacy"
+            )
+            conn.execute("DROP TABLE memory_summaries_legacy")
+            return
+        if "source_message_ids" not in columns:
+            conn.execute(
+                "ALTER TABLE memory_summaries ADD COLUMN "
+                "source_message_ids TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "source_digest" not in columns:
+            conn.execute(
+                "ALTER TABLE memory_summaries ADD COLUMN "
+                "source_digest TEXT NOT NULL DEFAULT ''"
+            )
 
     def get_active_fact(
         self, tenant_id: str, user_id: str, key: str
@@ -133,17 +179,100 @@ class SQLiteMemoryStore:
         with self._connect() as conn:
             row = conn.execute(
                 f"SELECT {self._FACT_COLUMNS} FROM memory_facts "
-                "WHERE tenant_id = ? AND user_id = ? AND memory_key = ? AND status = 'active'",
+                "WHERE tenant_id = ? AND user_id = ? AND memory_key = ? "
+                "AND status IN ('active', 'stale') ORDER BY version DESC LIMIT 1",
                 (tenant_id, user_id, key),
             ).fetchone()
         return self._record(row) if row else None
+
+    def write_fact(
+        self,
+        tenant_id: str,
+        user_id: str,
+        key: str,
+        value: str,
+        category: MemoryCategory,
+        importance: float,
+        confidence: float,
+        explicit: bool,
+        source_event_id: Optional[str],
+        metadata: Dict[str, Any],
+        current_time: datetime,
+    ) -> MemoryRecord:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"SELECT {self._FACT_COLUMNS} FROM memory_facts "
+                "WHERE tenant_id = ? AND user_id = ? AND memory_key = ? "
+                "AND status IN ('active', 'stale') ORDER BY version DESC LIMIT 1",
+                (tenant_id, user_id, key),
+            ).fetchone()
+            existing = self._record(row) if row else None
+            if existing and existing.value == value:
+                if source_event_id and existing.source_event_id == source_event_id:
+                    return existing
+                timestamp = _iso(current_time)
+                conn.execute(
+                    "UPDATE memory_facts SET last_confirmed_at = ?, updated_at = ?, "
+                    "confidence = MIN(1.0, confidence + 0.05), "
+                    "reinforcement = MIN(2.0, reinforcement + 0.1), "
+                    "status = 'active', valid_to = NULL WHERE memory_id = ?",
+                    (timestamp, timestamp, existing.memory_id),
+                )
+                updated = conn.execute(
+                    f"SELECT {self._FACT_COLUMNS} FROM memory_facts WHERE memory_id = ?",
+                    (existing.memory_id,),
+                ).fetchone()
+                return self._record(updated)
+            if existing and not explicit:
+                raise ValueError(
+                    "automatically extracted fact conflicts with active memory"
+                )
+            record = MemoryRecord(
+                memory_id=str(uuid4()),
+                tenant_id=tenant_id,
+                user_id=user_id,
+                key=key,
+                value=value,
+                category=category,
+                status="active",
+                version=(existing.version + 1) if existing else 1,
+                importance=importance,
+                confidence=confidence,
+                reinforcement=1.0,
+                explicit=explicit,
+                created_at=current_time,
+                updated_at=current_time,
+                last_confirmed_at=current_time,
+                valid_from=current_time,
+                valid_to=None,
+                supersedes_id=existing.memory_id if existing else None,
+                source_event_id=source_event_id,
+                metadata=metadata,
+            )
+            if existing:
+                conn.execute(
+                    "UPDATE memory_facts SET status = 'superseded', valid_to = ?, updated_at = ? "
+                    "WHERE memory_id = ? AND status IN ('active', 'stale')",
+                    (
+                        _iso(current_time),
+                        _iso(current_time),
+                        existing.memory_id,
+                    ),
+                )
+            conn.execute(
+                "INSERT INTO memory_facts(" + self._FACT_COLUMNS + ") "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                self._values(record),
+            )
+            return record
 
     def save_fact(self, memory: MemoryRecord, supersede_id: Optional[str] = None) -> None:
         with self._connect() as conn:
             if supersede_id:
                 conn.execute(
                     "UPDATE memory_facts SET status = 'superseded', valid_to = ?, updated_at = ? "
-                    "WHERE memory_id = ? AND status = 'active'",
+                    "WHERE memory_id = ? AND status IN ('active', 'stale')",
                     (_iso(memory.valid_from), _iso(memory.updated_at), supersede_id),
                 )
             conn.execute(
@@ -158,9 +287,36 @@ class SQLiteMemoryStore:
             conn.execute(
                 "UPDATE memory_facts SET last_confirmed_at = ?, updated_at = ?, "
                 "confidence = MIN(1.0, confidence + 0.05), "
-                "reinforcement = MIN(2.0, reinforcement + 0.1) "
-                "WHERE memory_id = ? AND status = 'active'",
+                "reinforcement = MIN(2.0, reinforcement + 0.1), status = 'active', "
+                "valid_to = NULL WHERE memory_id = ? AND status IN ('active', 'stale')",
                 (timestamp, timestamp, memory_id),
+            )
+            row = conn.execute(
+                f"SELECT {self._FACT_COLUMNS} FROM memory_facts WHERE memory_id = ?",
+                (memory_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(memory_id)
+        return self._record(row)
+
+    def mark_fact_status(
+        self, memory_id: str, status: str, changed_at: datetime
+    ) -> MemoryRecord:
+        if status not in {
+            "active",
+            "stale",
+            "resolved",
+            "accepted",
+            "rejected",
+        }:
+            raise ValueError("unsupported memory status")
+        timestamp = _iso(changed_at)
+        valid_to = timestamp if status in {"resolved", "accepted", "rejected"} else None
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE memory_facts SET status = ?, updated_at = ?, valid_to = ? "
+                "WHERE memory_id = ?",
+                (status, timestamp, valid_to, memory_id),
             )
             row = conn.execute(
                 f"SELECT {self._FACT_COLUMNS} FROM memory_facts WHERE memory_id = ?",
@@ -236,8 +392,9 @@ class SQLiteMemoryStore:
             conn.execute(f"DELETE FROM memory_facts WHERE {conditions}", params)
             for session_id in sessions:
                 conn.execute(
-                    "DELETE FROM memory_summaries WHERE tenant_id = ? AND session_id = ?",
-                    (tenant_id, session_id),
+                    "DELETE FROM memory_summaries "
+                    "WHERE tenant_id = ? AND user_id = ? AND session_id = ?",
+                    (tenant_id, user_id, session_id),
                 )
             has_messages = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_messages'"
@@ -282,6 +439,16 @@ class SQLiteMemoryStore:
                 ),
             ).fetchone()
             if existing:
+                conn.execute(
+                    "UPDATE memory_events SET session_id = ?, content = ?, metadata = ? "
+                    "WHERE event_id = ?",
+                    (
+                        event["session_id"],
+                        event["content"],
+                        json.dumps(event.get("metadata", {}), ensure_ascii=False),
+                        existing["event_id"],
+                    ),
+                )
                 return str(existing["event_id"])
             conn.execute(
                 "INSERT INTO memory_events(event_id, tenant_id, user_id, session_id, "
@@ -311,6 +478,27 @@ class SQLiteMemoryStore:
             ).fetchall()
         return [self._event_record(row, tenant_id, user_id) for row in rows]
 
+    def list_event_details(
+        self, tenant_id: str, user_id: str, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT event_id, session_id, request_id, kind, content, metadata, created_at "
+                "FROM memory_events WHERE tenant_id = ? AND user_id = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (tenant_id, user_id, limit),
+            ).fetchall()
+        return [
+            {
+                "event_id": row["event_id"], "session_id": row["session_id"],
+                "request_id": row["request_id"], "kind": row["kind"],
+                "content": row["content"],
+                "metadata": json.loads(row["metadata"] or "{}"),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
     def log_access(
         self, memory_id: str, tenant_id: str, user_id: str, score: float
     ) -> None:
@@ -324,34 +512,47 @@ class SQLiteMemoryStore:
     def save_summary(
         self,
         tenant_id: str,
+        user_id: str,
         session_id: str,
         summary: str,
         covered_message_count: int,
         version: str,
+        source_message_ids: Optional[List[str]] = None,
+        source_digest: str = "",
     ) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO memory_summaries(tenant_id, session_id, summary, "
-                "covered_message_count, version, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(tenant_id, session_id) DO UPDATE SET summary = excluded.summary, "
+                "INSERT INTO memory_summaries(tenant_id, user_id, session_id, summary, "
+                "covered_message_count, version, source_message_ids, source_digest, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(tenant_id, user_id, session_id) "
+                "DO UPDATE SET summary = excluded.summary, "
                 "covered_message_count = excluded.covered_message_count, version = excluded.version, "
+                "source_message_ids = excluded.source_message_ids, "
+                "source_digest = excluded.source_digest, "
                 "updated_at = excluded.updated_at",
                 (
                     tenant_id,
+                    user_id,
                     session_id,
                     summary,
                     covered_message_count,
                     version,
+                    json.dumps(source_message_ids or []),
+                    source_digest,
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
 
-    def load_summary(self, tenant_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+    def load_summary(
+        self, tenant_id: str, user_id: str, session_id: str
+    ) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT summary, covered_message_count, version FROM memory_summaries "
-                "WHERE tenant_id = ? AND session_id = ?",
-                (tenant_id, session_id),
+                "SELECT summary, covered_message_count, version, "
+                "source_message_ids, source_digest FROM memory_summaries "
+                "WHERE tenant_id = ? AND user_id = ? AND session_id = ?",
+                (tenant_id, user_id, session_id),
             ).fetchone()
         if row is None:
             return None
@@ -359,7 +560,32 @@ class SQLiteMemoryStore:
             "summary": row["summary"],
             "covered_message_count": row["covered_message_count"],
             "version": row["version"],
+            "source_message_ids": json.loads(row["source_message_ids"] or "[]"),
+            "source_digest": row["source_digest"],
         }
+
+    def list_summaries(
+        self, tenant_id: str, user_id: str, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT session_id, summary, covered_message_count, version, "
+                "source_message_ids, source_digest, updated_at "
+                "FROM memory_summaries WHERE tenant_id = ? AND user_id = ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (tenant_id, user_id, limit),
+            ).fetchall()
+        return [
+            {
+                "session_id": row["session_id"], "summary": row["summary"],
+                "covered_message_count": row["covered_message_count"],
+                "version": row["version"],
+                "source_message_ids": json.loads(row["source_message_ids"] or "[]"),
+                "source_digest": row["source_digest"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
 
     def prune_retention(
         self,
@@ -598,10 +824,39 @@ class PostgresMemoryStore:
             )
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS memory_summaries ("
-                "tenant_id TEXT NOT NULL, session_id TEXT NOT NULL, summary TEXT NOT NULL, "
+                "tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, "
+                "session_id TEXT NOT NULL, summary TEXT NOT NULL, "
                 "covered_message_count INTEGER NOT NULL, version TEXT NOT NULL, "
+                "source_message_ids JSONB NOT NULL DEFAULT '[]'::jsonb, "
+                "source_digest TEXT NOT NULL DEFAULT '', "
                 "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
-                "PRIMARY KEY(tenant_id, session_id))"
+                "PRIMARY KEY(tenant_id, user_id, session_id))"
+            )
+            conn.execute(
+                "ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS "
+                "user_id TEXT NOT NULL DEFAULT ''"
+            )
+            conn.execute(
+                "UPDATE memory_summaries summaries SET user_id = owners.user_id FROM ("
+                "SELECT tenant_id, session_id, MIN(user_id) AS user_id FROM memory_events "
+                "GROUP BY tenant_id, session_id HAVING COUNT(DISTINCT user_id) = 1) owners "
+                "WHERE summaries.tenant_id = owners.tenant_id "
+                "AND summaries.session_id = owners.session_id AND summaries.user_id = ''"
+            )
+            conn.execute(
+                "ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS "
+                "source_message_ids JSONB NOT NULL DEFAULT '[]'::jsonb"
+            )
+            conn.execute(
+                "ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS "
+                "source_digest TEXT NOT NULL DEFAULT ''"
+            )
+            conn.execute(
+                "ALTER TABLE memory_summaries DROP CONSTRAINT IF EXISTS memory_summaries_pkey"
+            )
+            conn.execute(
+                "ALTER TABLE memory_summaries ADD CONSTRAINT memory_summaries_pkey "
+                "PRIMARY KEY(tenant_id, user_id, session_id)"
             )
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS memory_access_log ("
@@ -624,17 +879,98 @@ class PostgresMemoryStore:
         with self._connect() as conn:
             row = conn.execute(
                 f"SELECT {self._FACT_COLUMNS} FROM memory_facts WHERE tenant_id = %s "
-                "AND user_id = %s AND memory_key = %s AND status = 'active'",
+                "AND user_id = %s AND memory_key = %s "
+                "AND status IN ('active', 'stale') ORDER BY version DESC LIMIT 1",
                 (tenant_id, user_id, key),
             ).fetchone()
         return self._record(row) if row else None
+
+    def write_fact(
+        self,
+        tenant_id: str,
+        user_id: str,
+        key: str,
+        value: str,
+        category: MemoryCategory,
+        importance: float,
+        confidence: float,
+        explicit: bool,
+        source_event_id: Optional[str],
+        metadata: Dict[str, Any],
+        current_time: datetime,
+    ) -> MemoryRecord:
+        lock_key = json.dumps(
+            [tenant_id, user_id, key],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        with self._connect() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
+            row = conn.execute(
+                f"SELECT {self._FACT_COLUMNS} FROM memory_facts WHERE tenant_id = %s "
+                "AND user_id = %s AND memory_key = %s "
+                "AND status IN ('active', 'stale') ORDER BY version DESC LIMIT 1 FOR UPDATE",
+                (tenant_id, user_id, key),
+            ).fetchone()
+            existing = self._record(row) if row else None
+            if existing and existing.value == value:
+                if source_event_id and existing.source_event_id == source_event_id:
+                    return existing
+                updated = conn.execute(
+                    "UPDATE memory_facts SET last_confirmed_at = %s, updated_at = %s, "
+                    "confidence = LEAST(1.0, confidence + 0.05), "
+                    "reinforcement = LEAST(2.0, reinforcement + 0.1), "
+                    "status = 'active', valid_to = NULL WHERE memory_id = %s "
+                    "RETURNING " + self._FACT_COLUMNS,
+                    (current_time, current_time, existing.memory_id),
+                ).fetchone()
+                return self._record(updated)
+            if existing and not explicit:
+                raise ValueError(
+                    "automatically extracted fact conflicts with active memory"
+                )
+            record = MemoryRecord(
+                memory_id=str(uuid4()),
+                tenant_id=tenant_id,
+                user_id=user_id,
+                key=key,
+                value=value,
+                category=category,
+                status="active",
+                version=(existing.version + 1) if existing else 1,
+                importance=importance,
+                confidence=confidence,
+                reinforcement=1.0,
+                explicit=explicit,
+                created_at=current_time,
+                updated_at=current_time,
+                last_confirmed_at=current_time,
+                valid_from=current_time,
+                valid_to=None,
+                supersedes_id=existing.memory_id if existing else None,
+                source_event_id=source_event_id,
+                metadata=metadata,
+            )
+            if existing:
+                conn.execute(
+                    "UPDATE memory_facts SET status = 'superseded', valid_to = %s, updated_at = %s "
+                    "WHERE memory_id = %s AND status IN ('active', 'stale')",
+                    (current_time, current_time, existing.memory_id),
+                )
+            conn.execute(
+                "INSERT INTO memory_facts(" + self._FACT_COLUMNS + ") VALUES ("
+                + ", ".join(["%s"] * 19)
+                + ", %s::jsonb)",
+                self._values(record),
+            )
+            return record
 
     def save_fact(self, memory: MemoryRecord, supersede_id: Optional[str] = None) -> None:
         with self._connect() as conn:
             if supersede_id:
                 conn.execute(
                     "UPDATE memory_facts SET status = 'superseded', valid_to = %s, updated_at = %s "
-                    "WHERE memory_id = %s AND status = 'active'",
+                    "WHERE memory_id = %s AND status IN ('active', 'stale')",
                     (memory.valid_from, memory.updated_at, supersede_id),
                 )
             conn.execute(
@@ -649,9 +985,32 @@ class PostgresMemoryStore:
             row = conn.execute(
                 "UPDATE memory_facts SET last_confirmed_at = %s, updated_at = %s, "
                 "confidence = LEAST(1.0, confidence + 0.05), "
-                "reinforcement = LEAST(2.0, reinforcement + 0.1) "
-                "WHERE memory_id = %s AND status = 'active' RETURNING " + self._FACT_COLUMNS,
+                "reinforcement = LEAST(2.0, reinforcement + 0.1), status = 'active', "
+                "valid_to = NULL WHERE memory_id = %s AND status IN ('active', 'stale') "
+                "RETURNING " + self._FACT_COLUMNS,
                 (confirmed_at, confirmed_at, memory_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(memory_id)
+        return self._record(row)
+
+    def mark_fact_status(
+        self, memory_id: str, status: str, changed_at: datetime
+    ) -> MemoryRecord:
+        if status not in {
+            "active",
+            "stale",
+            "resolved",
+            "accepted",
+            "rejected",
+        }:
+            raise ValueError("unsupported memory status")
+        valid_to = changed_at if status in {"resolved", "accepted", "rejected"} else None
+        with self._connect() as conn:
+            row = conn.execute(
+                "UPDATE memory_facts SET status = %s, updated_at = %s, valid_to = %s "
+                "WHERE memory_id = %s RETURNING " + self._FACT_COLUMNS,
+                (status, changed_at, valid_to, memory_id),
             ).fetchone()
         if row is None:
             raise KeyError(memory_id)
@@ -721,8 +1080,9 @@ class PostgresMemoryStore:
             conn.execute(f"DELETE FROM memory_facts WHERE {conditions}", params)
             for session_id in sessions:
                 conn.execute(
-                    "DELETE FROM memory_summaries WHERE tenant_id = %s AND session_id = %s",
-                    (tenant_id, session_id),
+                    "DELETE FROM memory_summaries "
+                    "WHERE tenant_id = %s AND user_id = %s AND session_id = %s",
+                    (tenant_id, user_id, session_id),
                 )
             messages_table = conn.execute("SELECT to_regclass('session_messages') AS name").fetchone()
             if messages_table and messages_table["name"]:
@@ -760,7 +1120,8 @@ class PostgresMemoryStore:
                 "INSERT INTO memory_events(event_id, tenant_id, user_id, session_id, request_id, "
                 "kind, content, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb) "
                 "ON CONFLICT(tenant_id, user_id, request_id, kind) DO UPDATE SET "
-                "request_id = EXCLUDED.request_id RETURNING event_id",
+                "session_id = EXCLUDED.session_id, content = EXCLUDED.content, "
+                "metadata = EXCLUDED.metadata RETURNING event_id",
                 (
                     str(uuid4()),
                     event["tenant_id"],
@@ -785,6 +1146,18 @@ class PostgresMemoryStore:
             ).fetchall()
         return [self._event_record(row, tenant_id, user_id) for row in rows]
 
+    def list_event_details(
+        self, tenant_id: str, user_id: str, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT event_id, session_id, request_id, kind, content, metadata, created_at "
+                "FROM memory_events WHERE tenant_id = %s AND user_id = %s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (tenant_id, user_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def log_access(
         self, memory_id: str, tenant_id: str, user_id: str, score: float
     ) -> None:
@@ -798,29 +1171,63 @@ class PostgresMemoryStore:
     def save_summary(
         self,
         tenant_id: str,
+        user_id: str,
         session_id: str,
         summary: str,
         covered_message_count: int,
         version: str,
+        source_message_ids: Optional[List[str]] = None,
+        source_digest: str = "",
     ) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO memory_summaries(tenant_id, session_id, summary, covered_message_count, "
-                "version) VALUES (%s, %s, %s, %s, %s) ON CONFLICT(tenant_id, session_id) "
+                "INSERT INTO memory_summaries("
+                "tenant_id, user_id, session_id, summary, covered_message_count, "
+                "version, source_message_ids, source_digest) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s) "
+                "ON CONFLICT(tenant_id, user_id, session_id) "
                 "DO UPDATE SET summary = EXCLUDED.summary, "
                 "covered_message_count = EXCLUDED.covered_message_count, "
-                "version = EXCLUDED.version, updated_at = CURRENT_TIMESTAMP",
-                (tenant_id, session_id, summary, covered_message_count, version),
+                "version = EXCLUDED.version, "
+                "source_message_ids = EXCLUDED.source_message_ids, "
+                "source_digest = EXCLUDED.source_digest, "
+                "updated_at = CURRENT_TIMESTAMP",
+                (
+                    tenant_id,
+                    user_id,
+                    session_id,
+                    summary,
+                    covered_message_count,
+                    version,
+                    json.dumps(source_message_ids or []),
+                    source_digest,
+                ),
             )
 
-    def load_summary(self, tenant_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+    def load_summary(
+        self, tenant_id: str, user_id: str, session_id: str
+    ) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT summary, covered_message_count, version FROM memory_summaries "
-                "WHERE tenant_id = %s AND session_id = %s",
-                (tenant_id, session_id),
+                "SELECT summary, covered_message_count, version, "
+                "source_message_ids, source_digest FROM memory_summaries "
+                "WHERE tenant_id = %s AND user_id = %s AND session_id = %s",
+                (tenant_id, user_id, session_id),
             ).fetchone()
         return dict(row) if row else None
+
+    def list_summaries(
+        self, tenant_id: str, user_id: str, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT session_id, summary, covered_message_count, version, "
+                "source_message_ids, source_digest, updated_at "
+                "FROM memory_summaries WHERE tenant_id = %s AND user_id = %s "
+                "ORDER BY updated_at DESC LIMIT %s",
+                (tenant_id, user_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def prune_retention(
         self,

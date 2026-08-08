@@ -34,6 +34,15 @@ def test_registry_exports_mcp_style_manifest():
     ]
 
 
+def test_rag_manifest_exposes_optional_information_gap():
+    registry = build_default_tool_registry(allowed_tools=["rag_summarize"])
+
+    schema = registry.as_mcp_manifest()["tools"][0]["input_schema"]
+
+    assert schema["required"] == ["query", "information_gap"]
+    assert schema["properties"]["information_gap"]["type"] == "string"
+
+
 def test_registry_rejects_duplicate_tool_names():
     registry = build_default_tool_registry(allowed_tools=[])
 

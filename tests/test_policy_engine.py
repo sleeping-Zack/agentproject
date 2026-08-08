@@ -21,6 +21,35 @@ def test_policy_allows_safe_read_tools():
     assert decision.action == PolicyAction.ALLOW
 
 
+def test_capability_manifest_applies_tenant_entitlements_without_consuming_calls():
+    registry = build_default_tool_registry(
+        ["rag_summarize", "get_weather", "get_user_location"]
+    )
+    policy = ToolPolicy(tool_registry=registry)
+
+    manifest = policy.capability_manifest(
+        tenant_id="tenant-b",
+        user_role="user",
+        scene="default",
+    )
+
+    assert [item["name"] for item in manifest] == ["rag_summarize"]
+
+
+def test_capability_manifest_keeps_argument_constrained_self_service_available():
+    registry = build_default_tool_registry(["fetch_external_data"])
+    policy = ToolPolicy(tool_registry=registry)
+
+    manifest = policy.capability_manifest(
+        tenant_id="tenant-a",
+        user_role="user",
+        scene="report",
+    )
+
+    assert manifest[0]["name"] == "fetch_external_data"
+    assert manifest[0]["policy_action"] == "allow"
+
+
 def test_policy_requires_approval_for_sensitive_report_data():
     registry = build_default_tool_registry(["fetch_external_data"])
     policy = ToolPolicy(tool_registry=registry)
@@ -35,6 +64,34 @@ def test_policy_requires_approval_for_sensitive_report_data():
 
     assert decision.action == PolicyAction.NEED_APPROVAL
     assert "requires approval" in decision.reason
+
+
+def test_user_can_read_own_single_month_report_without_approval():
+    registry = build_default_tool_registry(["fetch_external_data"])
+    policy = ToolPolicy(tool_registry=registry)
+
+    own_data = policy.decide(
+        tenant_id="tenant-a",
+        principal_id="user-1005",
+        data_user_id="1005",
+        user_role="user",
+        scene="report",
+        tool_name="fetch_external_data",
+        args={"user_id": "1005", "month": "2025-09"},
+    )
+    another_users_data = policy.decide(
+        tenant_id="tenant-a",
+        principal_id="user-1005",
+        data_user_id="1005",
+        user_role="user",
+        scene="report",
+        tool_name="fetch_external_data",
+        args={"user_id": "1001", "month": "2025-09"},
+    )
+
+    assert own_data.action == PolicyAction.ALLOW
+    assert own_data.matched_rule_id == "report-data-self"
+    assert another_users_data.action == PolicyAction.NEED_APPROVAL
 
 
 def test_policy_denies_sensitive_data_outside_report_scene():

@@ -1,17 +1,27 @@
 import asyncio
 import json
+import logging
 import os
 import time
-from typing import Dict, List, Optional
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from typing import Dict, List, Literal, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent.long_term_memory import MemoryCategory
+from agent.long_term_memory import MemoryCategory, calculate_time_decay
 from agent.react_agent import ReactAgent
-from agent.runner import AgentRunner, AgentTask, ReactAgentBackend
+from agent.policies import ToolPolicy
+from agent.runner import (
+    AgentRunner,
+    AgentTask,
+    AutoRoutingBackend,
+    PlannerAgentBackend,
+    ReactAgentBackend,
+)
 from agent.tools.agent_tools import (
     fetch_external_data,
     get_weather,
@@ -33,25 +43,83 @@ from services.factories import (
 )
 from services.rate_limit import create_rate_limiter
 
-app = FastAPI(title="Sweeper Agent API", version="0.4.0")
+LOGGER = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    await start_memory_retention()
+    try:
+        yield
+    finally:
+        await stop_memory_retention()
+
+
+app = FastAPI(
+    title="Sweeper Agent API",
+    version="0.4.0",
+    lifespan=_app_lifespan,
+)
+_request_auth: ContextVar[Optional[AuthContext]] = ContextVar(
+    "request_auth", default=None
+)
+
+
+@app.middleware("http")
+async def authenticate_request(request: Request, call_next):
+    if request.url.path in {"/health", "/docs", "/openapi.json", "/redoc"}:
+        return await call_next(request)
+    try:
+        context = resolve_auth_context(
+            api_key=request.headers.get("X-API-Key", ""),
+            authorization=request.headers.get("Authorization"),
+            header_tenant_id=request.headers.get("X-Tenant-ID"),
+            header_user_role=request.headers.get("X-User-Role"),
+            header_principal_id=request.headers.get("X-Principal-ID"),
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=401, content={"detail": str(exc)})
+    token = _request_auth.set(context)
+    request.state.auth_context = context
+    try:
+        return await call_next(request)
+    finally:
+        _request_auth.reset(token)
+
+
 configure_telemetry(app)
 store = create_session_store()
 agent = ReactAgent(session_store=store)
 approval_store = create_approval_store()
 artifact_store = create_artifact_store()
+runtime_tool_policy = ToolPolicy(tool_registry=tool_registry)
 harness_runner = AgentRunner(
-    backend=ReactAgentBackend(agent=agent),
+    backend=AutoRoutingBackend(
+        react_backend=ReactAgentBackend(agent=agent),
+        planner_backend=PlannerAgentBackend(agent=agent),
+        tool_policy=runtime_tool_policy,
+    ),
+    policy=runtime_tool_policy,
     approval_store=approval_store,
     artifact_store=artifact_store,
     conversation_memory=agent.memory,
 )
+_retention_task: Optional[asyncio.Task] = None
 rate_limiter = create_rate_limiter(
     max_requests=int(os.getenv("AGENT_RATE_LIMIT_REQUESTS", "60")),
     window_seconds=int(os.getenv("AGENT_RATE_LIMIT_WINDOW_SECONDS", "60")),
 )
 mcp_server = MCPToolServer(
     tool_handlers={
-        "rag_summarize": lambda args: rag_summarize.invoke({"query": args["query"]}),
+        "rag_summarize": lambda args: rag_summarize.invoke(
+            {
+                "query": args["query"],
+                "information_gap": args.get(
+                    "information_gap",
+                    "外部调用需要知识库证据",
+                ),
+            }
+        ),
         "get_weather": lambda args: get_weather.invoke({"city": args["city"]}),
         "fetch_external_data": lambda args: fetch_external_data.invoke(
             {"user_id": args["user_id"], "month": args["month"]}
@@ -62,12 +130,61 @@ mcp_server = MCPToolServer(
 )
 
 
+async def _retention_loop() -> None:
+    interval = max(
+        60,
+        int(os.getenv("AGENT_MEMORY_RETENTION_INTERVAL_SECONDS", "86400")),
+    )
+    while True:
+        try:
+            result = await asyncio.to_thread(agent.long_term_memory.run_retention)
+            metrics_registry.inc_counter(
+                "agent_memory_retention_runs_total", {"status": "success"}
+            )
+            for name, count in result.items():
+                metrics_registry.inc_counter(
+                    "agent_memory_retention_deleted_total",
+                    {"kind": str(name)},
+                    value=float(count or 0),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            metrics_registry.inc_counter(
+                "agent_memory_retention_runs_total", {"status": "failure"}
+            )
+            LOGGER.exception("memory retention job failed")
+        await asyncio.sleep(interval)
+
+
+async def start_memory_retention() -> None:
+    global _retention_task
+    enabled = os.getenv(
+        "AGENT_MEMORY_RETENTION_ENABLED", "false"
+    ).strip().lower() == "true"
+    if enabled and (_retention_task is None or _retention_task.done()):
+        _retention_task = asyncio.create_task(_retention_loop())
+
+
+async def stop_memory_retention() -> None:
+    global _retention_task
+    if _retention_task is None:
+        return
+    _retention_task.cancel()
+    try:
+        await _retention_task
+    except asyncio.CancelledError:
+        pass
+    _retention_task = None
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     session_id: str = "default"
     stream: bool = False
     tenant_id: Optional[str] = None
     request_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    approval_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
 
 class ChatResponse(BaseModel):
@@ -127,6 +244,10 @@ class MemoryForgetRequest(BaseModel):
     key: Optional[str] = Field(default=None, min_length=1, max_length=200)
 
 
+class MemoryReviewRequest(BaseModel):
+    decision: Literal["accept", "reject"]
+
+
 class JudgeCase(BaseModel):
     query: str
     context: str = ""
@@ -142,6 +263,10 @@ def _expected_api_key() -> str:
 
 
 def _authorize(api_key: Optional[str]) -> None:
+    if _request_auth.get() is not None:
+        return
+    if os.getenv("AGENT_AUTH_MODE", "principal_api_key").strip().lower() == "jwt":
+        raise HTTPException(status_code=401, detail="Bearer token is required")
     if api_key != _expected_api_key():
         raise HTTPException(status_code=401, detail="invalid api key")
 
@@ -153,7 +278,22 @@ def _auth_context(
     header_principal_id: Optional[str] = None,
     body_tenant_id: Optional[str] = None,
 ) -> AuthContext:
-    _authorize(api_key)
+    authenticated = _request_auth.get()
+    if authenticated is not None:
+        supplied = {
+            "tenant_id": header_tenant_id or body_tenant_id,
+            "user_role": header_user_role,
+            "principal_id": header_principal_id,
+        }
+        for name, value in supplied.items():
+            if value is not None and value.strip() and value.strip() != getattr(
+                authenticated, name
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail=f"{name} does not match authenticated identity",
+                )
+        return authenticated
     try:
         return resolve_auth_context(
             api_key=api_key or "",
@@ -178,6 +318,15 @@ def _rate_limit(request: Request, tenant_id: str) -> None:
 
 
 def _resolve_tenant(body_tenant: Optional[str], header_tenant: Optional[str]) -> str:
+    authenticated = _request_auth.get()
+    if authenticated is not None:
+        supplied = header_tenant or body_tenant
+        if supplied and supplied != authenticated.tenant_id:
+            raise HTTPException(
+                status_code=401,
+                detail="tenant_id does not match authenticated identity",
+            )
+        return authenticated.tenant_id
     return header_tenant or body_tenant or "default"
 
 
@@ -187,6 +336,13 @@ def _require_approval_operator(context: AuthContext) -> None:
 
 
 def _require_memory_user_id(principal_id: Optional[str]) -> str:
+    authenticated = _request_auth.get()
+    if (
+        authenticated is not None
+        and os.getenv("AGENT_AUTH_MODE", "principal_api_key").strip().lower()
+        != "legacy_headers"
+    ):
+        return authenticated.principal_id
     if principal_id is None or not principal_id.strip():
         raise HTTPException(
             status_code=400,
@@ -208,6 +364,22 @@ def _load_tenant_approval(approval_id: str, tenant_id: str):
 @app.get("/health")
 async def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/auth/me")
+async def authenticated_identity(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict[str, str]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    return {
+        "tenant_id": auth.tenant_id,
+        "user_id": auth.principal_id,
+        "role": auth.user_role,
+        "data_user_id": auth.data_user_id or "",
+    }
 
 
 @app.get("/memory")
@@ -267,6 +439,33 @@ async def forget_memory(
     return {"deleted": deleted}
 
 
+@app.post("/memory/{memory_id}/review")
+async def review_pending_memory(
+    memory_id: str,
+    request: MemoryReviewRequest,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    user_id = _require_memory_user_id(x_principal_id)
+    try:
+        memory = agent.long_term_memory.review_pending(
+            auth.tenant_id,
+            user_id,
+            memory_id,
+            request.decision,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="pending memory not found"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _memory_payload(memory)
+
+
 def _memory_payload(memory) -> Dict:
     return {
         "memory_id": memory.memory_id,
@@ -278,10 +477,127 @@ def _memory_payload(memory) -> Dict:
         "confidence": memory.confidence,
         "importance": memory.importance,
         "explicit": memory.explicit,
+        "metadata": memory.metadata,
         "source_event_id": memory.source_event_id,
         "supersedes_id": memory.supersedes_id,
         "last_confirmed_at": memory.last_confirmed_at.isoformat(),
+        "recency_score": calculate_time_decay(memory.category, memory.last_confirmed_at),
     }
+
+
+def _serialise_datetime(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _limit(value: int) -> int:
+    if value < 1 or value > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    return value
+
+
+@app.get("/sessions")
+async def list_sessions(
+    limit: int = 100,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> List[Dict]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    user_id = _require_memory_user_id(x_principal_id)
+    loader = getattr(store, "list_sessions", None)
+    if not callable(loader):
+        raise HTTPException(status_code=503, detail="session history backend is unavailable")
+    sessions = loader(auth.tenant_id, user_id, _limit(limit))
+    return [
+        {**item, "created_at": _serialise_datetime(item.get("created_at")),
+         "updated_at": _serialise_datetime(item.get("updated_at"))}
+        for item in sessions
+    ]
+
+
+@app.get("/sessions/{session_id}/messages")
+async def get_session_messages(
+    session_id: str,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    user_id = _require_memory_user_id(x_principal_id)
+    loader = getattr(store, "get_session_messages", None)
+    if not callable(loader):
+        raise HTTPException(status_code=503, detail="session history backend is unavailable")
+    messages = loader(session_id, tenant_id=auth.tenant_id, user_id=user_id)
+    if not messages:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"session_id": session_id, "messages": messages}
+
+
+@app.get("/memory/events")
+async def list_memory_events(
+    limit: int = 100,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> List[Dict]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    user_id = _require_memory_user_id(x_principal_id)
+    events = agent.long_term_memory.store.list_event_details(
+        auth.tenant_id, user_id, _limit(limit)
+    )
+    return [
+        {**event, "created_at": _serialise_datetime(event.get("created_at"))}
+        for event in events
+    ]
+
+
+@app.get("/memory/summaries")
+async def list_memory_summaries(
+    limit: int = 100,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> List[Dict]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    user_id = _require_memory_user_id(x_principal_id)
+    summaries = agent.long_term_memory.store.list_summaries(
+        auth.tenant_id, user_id, _limit(limit)
+    )
+    return [
+        {**summary, "updated_at": _serialise_datetime(summary.get("updated_at"))}
+        for summary in summaries
+    ]
+
+
+@app.get("/memory/procedures")
+async def list_memory_procedures(
+    status: str = "approved",
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> List[Dict]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_memory_user_id(x_principal_id)
+    if status not in {"approved", "candidate"}:
+        raise HTTPException(status_code=400, detail="unsupported procedure status")
+    if status != "approved" and auth.user_role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="candidate procedures require operator/admin role")
+    procedures = agent.long_term_memory.list_procedures(auth.tenant_id, status=status)
+    return [
+        {
+            "procedure_id": item.procedure_id, "tenant_id": item.tenant_id,
+            "agent_version": item.agent_version, "status": item.status,
+            "title": item.title, "content": item.content, "evidence": item.evidence,
+            "created_at": item.created_at.isoformat(),
+            "approved_at": item.approved_at.isoformat() if item.approved_at else None,
+        }
+        for item in procedures
+    ]
 
 
 @app.get("/tools/manifest")
@@ -320,9 +636,11 @@ async def chat(
         query=request.message,
         session_id=request.session_id,
         tenant_id=tenant_id,
-        user_id=x_principal_id.strip() if x_principal_id and x_principal_id.strip() else None,
+        user_id=auth.principal_id,
+        data_user_id=auth.data_user_id,
         user_role=auth.user_role,
         scene="default",
+        approval_id=request.approval_id,
     )
     result = await asyncio.to_thread(harness_runner.run, task)
     answer = result.answer
@@ -429,9 +747,11 @@ async def chat_stream(
         query=request.message,
         session_id=request.session_id,
         tenant_id=tenant_id,
-        user_id=x_principal_id.strip() if x_principal_id and x_principal_id.strip() else None,
+        user_id=auth.principal_id,
+        data_user_id=auth.data_user_id,
         user_role=auth.user_role,
         scene="default",
+        approval_id=request.approval_id,
         request_id=request_id,
         emit_events=True,
     )
@@ -546,7 +866,8 @@ async def harness_run(
         query=request.message,
         session_id=request.session_id,
         tenant_id=tenant_id,
-        user_id=x_principal_id.strip() if x_principal_id and x_principal_id.strip() else None,
+        user_id=auth.principal_id,
+        data_user_id=auth.data_user_id,
         user_role=auth.user_role,
         scene=request.scene,
         approval_id=request.approval_id,
@@ -566,6 +887,29 @@ async def harness_run(
     )
 
 
+@app.get("/approvals")
+async def list_approvals(
+    raw_request: Request,
+    status: Optional[Literal["pending", "approved", "denied"]] = None,
+    limit: int = 100,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> List[Dict]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_approval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    return [
+        record.__dict__
+        for record in approval_store.list_approvals(
+            auth.tenant_id,
+            status=status,
+            limit=max(1, min(limit, 200)),
+        )
+    ]
+
+
 @app.get("/approvals/{approval_id}")
 async def get_approval(
     approval_id: str,
@@ -578,7 +922,14 @@ async def get_approval(
     auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
     tenant_id = auth.tenant_id
     _rate_limit(raw_request, tenant_id)
-    return _load_tenant_approval(approval_id, tenant_id).__dict__
+    approval = _load_tenant_approval(approval_id, tenant_id)
+    if (
+        not auth.can_approve
+        and approval.principal_id
+        and approval.principal_id != auth.principal_id
+    ):
+        raise HTTPException(status_code=404, detail="approval not found")
+    return approval.__dict__
 
 
 @app.post("/approvals/{approval_id}/approve")
@@ -670,22 +1021,25 @@ async def judge_endpoint(
 
 @app.get("/traces/{request_id}")
 async def get_trace(request_id: str) -> Dict:
+    auth = _request_auth.get()
+    if auth is None:
+        raise HTTPException(status_code=401, detail="authentication required")
     try:
-        return store.get_trace(request_id)
+        return store.get_trace(request_id, tenant_id=auth.tenant_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="trace not found") from exc
 
 
 @app.get("/traces/{request_id}/otel")
 async def get_otel_trace(request_id: str) -> Dict:
+    auth = _request_auth.get()
+    if auth is None:
+        raise HTTPException(status_code=401, detail="authentication required")
     try:
-        return {"spans": trace_recorder.export_otel_spans(request_id)}
-    except KeyError:
-        try:
-            trace_payload = store.get_trace(request_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="trace not found") from exc
-        return {"spans": otel_spans_from_trace_payload(trace_payload)}
+        trace_payload = store.get_trace(request_id, tenant_id=auth.tenant_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="trace not found") from exc
+    return {"spans": otel_spans_from_trace_payload(trace_payload)}
 
 
 @app.post("/mcp")

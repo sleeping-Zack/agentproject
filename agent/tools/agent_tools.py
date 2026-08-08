@@ -28,10 +28,13 @@ def _require_allowed(tool_name: str) -> None:
     tool_registry.require_allowed(tool_name)
 
 
-@tool(description="从向量存储中检索参考资料")
-def rag_summarize(query: str) -> str:
+@tool(description="从向量存储中检索参考资料；每次检索必须说明尚未覆盖的信息缺口")
+def rag_summarize(query: str, information_gap: str) -> str:
     _require_allowed("rag_summarize")
-    assert_safe_tool_arguments("rag_summarize", {"query": query})
+    assert_safe_tool_arguments(
+        "rag_summarize",
+        {"query": query, "information_gap": information_gap},
+    )
     result = rag.rag_summarize_result(query)
     _record_rag_evidence(result)
     return result.answer
@@ -53,7 +56,7 @@ def get_user_location() -> str:
 @tool(description="获取用户的ID，以纯字符串形式返回")
 def get_user_id() -> str:
     _require_allowed("get_user_id")
-    return tool_data_service.get_user_id()
+    return request_context().extra.get("data_user_id") or tool_data_service.get_user_id()
 
 
 @tool(description="获取当前月份，以纯字符串形式返回")

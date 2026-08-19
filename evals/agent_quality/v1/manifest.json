@@ -1,0 +1,59 @@
+{
+  "case_count": 175,
+  "category_targets": {
+    "adversarial_boundary": 25,
+    "failure_recovery": 20,
+    "knowledge_fault": 50,
+    "multi_step": 25,
+    "safety": 25,
+    "tool_use": 30
+  },
+  "dataset_sha256": "9ce8ca267cca6a75184543873990ab2999707165c337b96251de038b290046c3",
+  "dataset_version": "agent-quality-v1",
+  "family_count": 175,
+  "files": {
+    "evals/agent_quality/v1/coverage_report.json": {
+      "sha256": "b3f34cab03851ff536e9ddf324fecb9e9aa57b428000a00fafc72f9a9c43f780"
+    },
+    "evals/agent_quality/v1/dev.jsonl": {
+      "case_count": 75,
+      "sha256": "9e79b5c1c2669b8938dbc2f0bbb360e4a5d3cd49dfeb1a15df6a7d9e7ce043bc"
+    },
+    "evals/agent_quality/v1/regression.jsonl": {
+      "case_count": 38,
+      "sha256": "91943f585795d8485b979718fe48ab38340047edafce6e0b1ec40f13c236138d"
+    },
+    "evals/agent_quality/v1/test.jsonl": {
+      "case_count": 62,
+      "sha256": "b59d4dc061d555b6f3faea5ab5c9f135e608eb433b0c474bf9eaa3ed34099f97"
+    }
+  },
+  "released_at": "2026-08-10",
+  "review_policy": {
+    "current_status": "pending_second_reviewer",
+    "production_golden_allowed": false,
+    "promotion_requirement": "phase-three independent human review and adjudication"
+  },
+  "rubric_version": "agent-rubric-v1",
+  "schema_version": 1,
+  "source_files": {
+    "config/evaluation_rubric.yml": "4f3962aac7761fd4a10e89664be2983d2e591941fbcd631e9e71a490ba2d1dac",
+    "evals/agent_quality/schema_v1.json": "e1a4f4a19d79097a8c10fd521c885a0a07d16ca1383e1e348a3615cb3741063a",
+    "evals/rag_golden.jsonl": "718b243f06153951c79c53e0dddb6f8a48ad9e8fbfa7eb16772fe4e9b7ffac42",
+    "evals/retrieval_golden.jsonl": "483440f72b7cda31329091be465b3ac4c93738da2b51bd0afac7472961c63a74",
+    "evals/retrieval_test_query_aliases_v1.jsonl": "319effb1a0446a2fc51ce311cd05bd16998cb4ff1b3b4d61958e61d07b0b3957",
+    "scripts/build_agent_quality_dataset.py": "14ba9584f6bc2a1b27646cc307bf284963582f0d0ffd14ea8925315cbe346bbc"
+  },
+  "split_policy": {
+    "default_ratio": {
+      "dev": 0.6,
+      "regression": 0.2,
+      "test": 0.2
+    },
+    "family_grouped": true,
+    "locked_retrieval_test_queries_forced_to_test": true,
+    "test_usage": "final promotion only; never tune prompts, policies, or thresholds"
+  },
+  "split_seed": 20260810,
+  "status": "candidate_pending_human_review"
+}

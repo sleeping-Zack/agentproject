@@ -30,9 +30,9 @@ from utils.streaming import get_final_response
 
 
 DEFAULT_MAX_MODEL_OUTPUT_TOKENS = int(
-    os.getenv("AGENT_MAX_MODEL_OUTPUT_TOKENS", "1200")
+    os.getenv("AGENT_MAX_MODEL_OUTPUT_TOKENS", "12000")
 )
-DEFAULT_MAX_RUN_TOKENS = int(os.getenv("AGENT_MAX_RUN_TOKENS", "12000"))
+DEFAULT_MAX_RUN_TOKENS = int(os.getenv("AGENT_MAX_RUN_TOKENS", "120000"))
 
 
 @dataclass
@@ -49,6 +49,7 @@ class AgentTask:
     emit_events: bool = False
     execution_mode: str = "react"
     routing_decision: Optional[TaskRoutingDecision] = None
+    required_tools: tuple[str, ...] = ()
 
 
 @dataclass
@@ -94,6 +95,12 @@ class ReactAgentBackend:
             from agent.react_agent import ReactAgent
 
             self.agent = ReactAgent()
+        try:
+            trace_event_offset = len(
+                trace_recorder.export_trace(task.request_id).get("events", [])
+            )
+        except KeyError:
+            trace_event_offset = 0
         budget_manager = state.budget.manager if state is not None else None
         chunks = list(
             self.agent.execute_stream(
@@ -121,20 +128,15 @@ class ReactAgentBackend:
                 publish_answer_tokens=False,
             )
         )
-        trace_payload = trace_recorder.export_trace(task.request_id)
+        full_trace_payload = trace_recorder.export_trace(task.request_id)
+        trace_payload = {
+            **full_trace_payload,
+            "events": full_trace_payload.get("events", [])[trace_event_offset:],
+        }
         evidence = self._extract_evidence(trace_payload)
         tokens_in, tokens_out, cost, cost_mode = self._extract_usage(trace_payload)
-        tool_results = []
-        for event in trace_payload.get("events", []):
-            if event.get("category") != "tool":
-                continue
-            metadata = event.get("metadata", {})
-            tool_results.append({
-                "tool": event["name"],
-                "status": "error" if event.get("error") else "success",
-                "args": dict(metadata.get("redacted_args") or {}),
-                "metadata": metadata,
-            })
+        tool_results = self._extract_tool_results(trace_payload)
+        fallback_answer, fallback_structured = self._evidence_fallback(evidence)
         return AgentBackendResult(
             answer=get_final_response(chunks),
             evidence=evidence,
@@ -145,7 +147,79 @@ class ReactAgentBackend:
             cost=cost,
             cost_mode=cost_mode,
             budget_accounted=budget_manager is not None and self.manages_budget,
+            safe_fallback_answer=fallback_answer,
+            safe_fallback_structured_answer=fallback_structured,
         )
+
+    @staticmethod
+    def _evidence_fallback(
+        evidence: List[Dict[str, Any]],
+    ) -> tuple[str, Optional[StructuredAnswer]]:
+        claims: List[AnswerClaim] = []
+        citations: List[str] = []
+        lines = ["生成式回答未通过校验，以下为知识库中可直接核验的原文："]
+        for item in evidence[:5]:
+            evidence_id = str(
+                item.get("id") or item.get("evidence_id") or ""
+            ).strip()
+            content = str(item.get("content") or "").strip()[:800]
+            source = str(item.get("source") or "知识库")
+            if not evidence_id or not content:
+                continue
+            lines.append(f"- [{evidence_id}] {source}：{content}")
+            citations.append(evidence_id)
+            claims.extend(
+                AnswerClaim(text=claim, evidence_ids=[evidence_id])
+                for claim in re.split(r"(?<=[。！？!?；;.])\s*|\n+", content)
+                if claim.strip()
+            )
+        if not claims:
+            return "", None
+        answer = "\n".join(lines)
+        return answer, StructuredAnswer(
+            summary=answer,
+            claims=claims,
+            citations=citations,
+        )
+
+    @staticmethod
+    def _extract_tool_results(trace_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        tool_results = []
+        pending_rag_results: List[Dict[str, Any]] = []
+        for event in trace_payload.get("events", []):
+            if event.get("category") == "rag" and event.get("name") == "evidence":
+                pending_rag_results.append(dict(event.get("metadata") or {}))
+                continue
+            if event.get("category") != "tool":
+                continue
+            metadata = event.get("metadata", {})
+            status = "error" if event.get("error") else "success"
+            if event.get("name") == "rag_summarize" and (
+                metadata.get("business_status") or pending_rag_results
+            ):
+                rag_metadata = (
+                    metadata
+                    if metadata.get("business_status")
+                    else pending_rag_results.pop(0)
+                )
+                business_status = str(rag_metadata.get("business_status") or "")
+                if business_status in {
+                    "success",
+                    "degraded",
+                    "empty",
+                    "verification_failed",
+                    "error",
+                }:
+                    status = business_status
+            tool_results.append({
+                "tool": event["name"],
+                "status": status,
+                "args": dict(metadata.get("redacted_args") or {}),
+                "content": str(metadata.get("result") or ""),
+                "result_truncated": bool(metadata.get("result_truncated", False)),
+                "metadata": metadata,
+            })
+        return tool_results
 
     @staticmethod
     def _extract_evidence(trace_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -189,6 +263,12 @@ class PlannerAgentBackend:
         self.agent = agent
 
     def __call__(self, task: AgentTask, state: AgentState) -> AgentBackendResult:
+        try:
+            trace_event_offset = len(
+                trace_recorder.export_trace(task.request_id).get("events", [])
+            )
+        except KeyError:
+            trace_event_offset = 0
         plan_kwargs = {
             "request_id": task.request_id,
             "tenant_id": task.tenant_id,
@@ -210,23 +290,37 @@ class PlannerAgentBackend:
                 "kind": item.kind,
                 "description": item.description,
                 "depends_on": list(item.depends_on),
+                "arguments": {
+                    key: value
+                    for key, value in item.args.items()
+                    if not key.startswith("_")
+                },
             }
             for item in plan_result.plan
         ]
         state.current_step = len(plan_result.results)
-        trace_payload = trace_recorder.export_trace(task.request_id)
+        full_trace_payload = trace_recorder.export_trace(task.request_id)
+        trace_payload = {
+            **full_trace_payload,
+            "events": full_trace_payload.get("events", [])[trace_event_offset:],
+        }
         tokens_in, tokens_out, cost, cost_mode = ReactAgentBackend._extract_usage(
             trace_payload
         )
-        tool_results = [
+        planner_results = [
             {
                 "tool": f"plan:{result.kind}",
                 "status": "success" if result.success else "failed",
                 "args": {"step_id": result.id},
                 "content": result.content,
                 "error": result.error,
+                "record_type": "planner_step",
             }
             for result in plan_result.results
+        ]
+        tool_results = [
+            *planner_results,
+            *ReactAgentBackend._extract_tool_results(trace_payload),
         ]
         successful_results = [
             result
@@ -869,23 +963,9 @@ class AgentRunner:
                     "remaining_tokens": state.budget.manager.remaining_tokens,
                 },
             )
-            usage_error = self._usage_overrun_reason(state)
-            if usage_error is not None:
-                state.mark_blocked(usage_error)
-                self._record_diagnostic(
-                    state,
-                    "budget",
-                    "blocked",
-                    step_id=step.step_id,
-                    model_name=backend_result.model_name,
-                    tokens_in=tokens_in,
-                    tokens_out=tokens_out,
-                    cost=cost,
-                    cost_mode=cost_mode,
-                    failure_reason=usage_error,
-                )
-                return self._result(state, state.error or "budget exhausted", verifier_result)
             for tool_result in backend_result.tool_results:
+                if tool_result.get("record_type") == "planner_step":
+                    continue
                 tool_name = str(tool_result.get("tool", "unknown"))
                 if not backend_result.budget_accounted:
                     try:
@@ -920,6 +1000,23 @@ class AgentRunner:
                     count_budget=False,
                 )
 
+            usage_error = self._usage_overrun_reason(state)
+            if usage_error is not None:
+                state.mark_blocked(usage_error)
+                self._record_diagnostic(
+                    state,
+                    "budget",
+                    "blocked",
+                    step_id=step.step_id,
+                    model_name=backend_result.model_name,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    cost=cost,
+                    cost_mode=cost_mode,
+                    failure_reason=usage_error,
+                )
+                return self._result(state, state.error or "budget exhausted", verifier_result)
+
             self._publish_event(
                 task.request_id,
                 "verification_started",
@@ -933,6 +1030,7 @@ class AgentRunner:
                 tool_results=backend_result.tool_results,
                 artifacts=[artifact.__dict__ for artifact in state.artifacts],
                 structured_answer=backend_result.structured_answer,
+                required_tools=self._verification_required_tools(task),
             )
             self._publish_event(
                 task.request_id,
@@ -966,6 +1064,59 @@ class AgentRunner:
             if verifier_result.passed:
                 state.routing_feedback = {}
                 break
+            fallback_answer = backend_result.safe_fallback_answer.strip()
+            if fallback_answer and fallback_answer != answer:
+                fallback_verifier = self.verifier.verify(
+                    query=task.query,
+                    answer=fallback_answer,
+                    evidence=backend_result.evidence,
+                    scene=scene,
+                    tool_results=backend_result.tool_results,
+                    artifacts=[artifact.__dict__ for artifact in state.artifacts],
+                    structured_answer=backend_result.safe_fallback_structured_answer,
+                    required_tools=self._verification_required_tools(task),
+                )
+                if fallback_verifier.passed:
+                    answer = fallback_answer
+                    verifier_result = fallback_verifier
+                    state.routing_feedback = {}
+                    self._publish_event(
+                        task.request_id,
+                        "verification_completed",
+                        {
+                            "attempt": attempt,
+                            "passed": True,
+                            "action": fallback_verifier.action,
+                            "score": fallback_verifier.score,
+                            "reasons": fallback_verifier.reasons,
+                            "citation_validity": fallback_verifier.citation_validity,
+                            "citation_coverage": fallback_verifier.citation_coverage,
+                            "unsupported_claim_rate": (
+                                fallback_verifier.unsupported_claim_rate
+                            ),
+                            "strategy": "verified_evidence_excerpt",
+                        },
+                    )
+                    self._record_diagnostic(
+                        state,
+                        "verifier",
+                        "ok",
+                        step_id=step.step_id,
+                        evidence_ids=[obs.source for obs in state.observations],
+                        verifier=fallback_verifier.__dict__,
+                        model_name=backend_result.model_name,
+                        retry=attempt,
+                    )
+                    self._publish_event(
+                        task.request_id,
+                        "execution_degraded",
+                        {
+                            "status": "completed",
+                            "reason": "generated_answer_verification_failed",
+                            "strategy": "verified_evidence_excerpt",
+                        },
+                    )
+                    break
             if verifier_result.action != "retry" or attempt >= self.max_verification_retries:
                 refusal = "请求未执行：回答未通过证据校验，已拒绝输出可能不可靠的结论。"
                 state.mark_rejected("verification_failed", refusal)
@@ -1350,10 +1501,13 @@ class AgentRunner:
             task.query,
             flags=re.IGNORECASE,
         )
-        month_match = re.search(r"\b(20[0-9]{2}-(?:0[1-9]|1[0-2]))\b", task.query)
+        month_match = re.search(
+            r"(?<!\d)(20[0-9]{2}-(?:0[1-9]|1[0-2]))(?!\d)",
+            task.query,
+        )
         if month_match is None:
             chinese_month = re.search(
-                r"\b(20[0-9]{2})年(1[0-2]|0?[1-9])月",
+                r"(?<!\d)(20[0-9]{2})年(1[0-2]|0?[1-9])月",
                 task.query,
             )
             month = (
@@ -1475,6 +1629,7 @@ class AgentRunner:
                 tool_results=backend_result.tool_results,
                 artifacts=[artifact.__dict__ for artifact in state.artifacts],
                 structured_answer=backend_result.safe_fallback_structured_answer,
+                required_tools=self._verification_required_tools(task),
             )
         if not fallback_answer or fallback_verifier is None or not fallback_verifier.passed:
             refusal = (
@@ -1560,6 +1715,15 @@ class AgentRunner:
             verifier=fallback_verifier.__dict__,
         )
         return self._result(state, answer, fallback_verifier)
+
+    @staticmethod
+    def _verification_required_tools(task: AgentTask) -> tuple[str, ...]:
+        routed = (
+            task.routing_decision.required_tools
+            if task.routing_decision is not None
+            else ()
+        )
+        return tuple(dict.fromkeys((*task.required_tools, *routed)))
 
     def _backend_preflight_reason(self, state: AgentState, query: str) -> Optional[str]:
         manager = state.budget.manager

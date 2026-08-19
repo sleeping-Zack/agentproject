@@ -37,6 +37,10 @@ def rag_summarize(query: str, information_gap: str) -> str:
     )
     result = rag.rag_summarize_result(query)
     _record_rag_evidence(result)
+    # verification_failed 时，rag_service 已保留带引用的摘要（citation_validity 达标），
+    # 优先返回该摘要供下游正常引用；仅当摘要为空时才降级为裸原文。
+    if result.business_status == "verification_failed" and result.evidence and not result.answer.strip():
+        return _render_rag_evidence(result.evidence)
     return result.answer
 
 
@@ -88,7 +92,7 @@ def fill_context_for_report():
 
 def _record_rag_evidence(result) -> None:
     ctx = request_context()
-    if not ctx.request_id or not result.evidence:
+    if not ctx.request_id:
         return
     evidence = [asdict(item) for item in result.evidence]
     try:
@@ -96,8 +100,24 @@ def _record_rag_evidence(result) -> None:
             ctx.request_id,
             category="rag",
             name="evidence",
-            metadata={"evidence": evidence},
+            metadata={
+                "business_status": result.business_status,
+                "evidence": evidence,
+                "verification": dict(result.verification or {}),
+            },
         ):
             pass
     except KeyError:
         return
+
+
+def _render_rag_evidence(evidence) -> str:
+    lines = ["生成式总结未通过一致性校验，请仅依据以下知识库原文作答："]
+    for item in list(evidence)[:5]:
+        payload = asdict(item)
+        evidence_id = str(payload.get("id") or "evidence")
+        source = str(payload.get("source") or "知识库")
+        content = str(payload.get("content") or "").strip()[:800]
+        if content:
+            lines.append(f"- [{evidence_id}] {source}：{content}")
+    return "\n".join(lines)

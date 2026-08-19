@@ -10,6 +10,8 @@ from agent.planner import (
     TaskPlanner,
 )
 from agent.policies import PlanValidator, Replanner
+from agent import react_agent as react_agent_module
+from observability.tracing import trace_recorder
 
 
 def test_planner_decomposes_compound_query():
@@ -20,6 +22,55 @@ def test_planner_decomposes_compound_query():
 
     assert "weather" in kinds
     assert "report" in kinds
+
+
+def test_planner_preserves_city_month_and_user_id_in_step_arguments():
+    planner = TaskPlanner()
+
+    plan = planner.plan("查询杭州天气，并生成用户1008在2026年7月的使用报告")
+
+    weather = next(task for task in plan if task.kind == "weather")
+    report = next(task for task in plan if task.kind == "report")
+    assert weather.args["city"] == "杭州"
+    assert report.args["user_id"] == "1008"
+    assert report.args["month"] == "2026-07"
+
+
+def test_planner_weather_handler_uses_explicit_city_and_records_real_tool(monkeypatch):
+    class FakeToolDataService:
+        def __init__(self):
+            self.cities = []
+
+        def get_user_location(self):
+            return "深圳"
+
+        def get_weather(self, city):
+            self.cities.append(city)
+            return f"{city}晴"
+
+    service = FakeToolDataService()
+    monkeypatch.setattr(react_agent_module, "tool_data_service", service)
+    react_agent = object.__new__(react_agent_module.ReactAgent)
+    planner_agent = react_agent._build_planner_agent()
+    request_id = "planner-explicit-city"
+    trace_recorder.start_trace(request_id, "planner-test")
+
+    result = planner_agent.run(
+        "查询杭州天气",
+        request_id=request_id,
+        task_context={"request_id": request_id},
+    )
+
+    assert result.results[0].content == "杭州晴"
+    assert service.cities == ["杭州"]
+    tool_events = [
+        event
+        for event in trace_recorder.export_trace(request_id)["events"]
+        if event["category"] == "tool"
+    ]
+    assert [(event["name"], event["metadata"]["redacted_args"]) for event in tool_events] == [
+        ("get_weather", {"city": "杭州"})
+    ]
 
 
 def test_planner_falls_back_to_generic_for_unknown_query():

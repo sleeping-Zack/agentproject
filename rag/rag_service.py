@@ -51,6 +51,7 @@ class RagResult:
     evidence: List[EvidenceChunk] = field(default_factory=list)
     citations: List[Citation] = field(default_factory=list)
     verification: Optional[Dict[str, Any]] = None
+    business_status: str = "success"
 
 
 def _build_reranker(cfg: Dict[str, Any]) -> Optional[BaseReranker]:
@@ -269,6 +270,7 @@ class RagSummarizeService(object):
                 answer="请求未执行：知识库中没有足够证据支持回答该问题。",
                 evidence=[],
                 citations=[],
+                business_status="empty",
                 verification={
                     "passed": False,
                     "action": "refuse",
@@ -314,15 +316,31 @@ class RagSummarizeService(object):
             if verified.passed:
                 break
         if verification is not None and not verification["passed"]:
-            answer_with_citations = (
-                "请求未执行：生成结果未通过证据一致性校验，"
-                "知识库中没有足够证据支持该结论。"
+            reasons = list(verification.get("reasons") or [])
+            unsupported_rate = float(verification.get("unsupported_claim_rate") or 0.0)
+            # 仅在"真正的未落地/有害"时拒绝：有害指令、证据矛盾，或几乎所有声明都无证据支撑。
+            # 其余（如弱语义支撑判断误伤、但 citation_validity/coverage 已达标的可用摘要）保留摘要，
+            # 避免"丢弃摘要→降级裸原文→下游引用闸门失败→retry→token 护栏→max_tokens_exceeded"的级联。
+            hard_fail = (
+                "harmful_instruction" in reasons
+                or "evidence_contradiction" in reasons
+                or unsupported_rate >= 1.0
             )
+            if hard_fail:
+                answer_with_citations = (
+                    "请求未执行：生成结果未通过证据一致性校验，"
+                    "知识库中没有足够证据支持该结论。"
+                )
         result = RagResult(
             answer=answer_with_citations,
             evidence=evidence,
             citations=citations_structured,
             verification=verification,
+            business_status=(
+                "verification_failed"
+                if verification is not None and not verification["passed"]
+                else "success"
+            ),
         )
         if self._semantic_cache is not None:
             self._semantic_cache.set(query, deepcopy(result), namespace=cache_namespace)

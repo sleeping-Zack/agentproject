@@ -4,8 +4,11 @@ from langchain_core.messages import ToolMessage
 from agent.tools.middleware import (
     _authorize_rag_call,
     _enforce_tool_budget,
+    _record_rag_outcome,
+    _run_with_timeout,
     _tool_result_event_payload,
 )
+from observability.context import bind_request_context, request_context
 
 
 def test_tool_budget_blocks_before_handler_invocation():
@@ -157,6 +160,53 @@ def test_rag_guard_does_not_limit_other_tools():
     ) is None
 
 
+def test_rag_guard_stops_after_empty_business_result():
+    runtime_context = {}
+    _record_rag_outcome(
+        runtime_context,
+        {"business_status": "empty", "evidence": []},
+    )
+
+    blocked = _authorize_rag_call(
+        runtime_context,
+        "rag_summarize",
+        {
+            "query": "换一个关键词继续查",
+            "information_gap": "尝试用另一种说法查找相同问题",
+        },
+        "call-2",
+    )
+
+    assert blocked is not None
+    assert "没有检索到" in blocked.content
+    assert runtime_context["rag_loop_closed_reason"] == "empty"
+
+
+def test_rag_guard_stops_after_relevant_evidence_is_available():
+    runtime_context = {}
+    _record_rag_outcome(
+        runtime_context,
+        {
+            "business_status": "verification_failed",
+            "evidence": [{"id": "manual-1", "content": "先断电再检查主刷。"}],
+        },
+    )
+
+    blocked = _authorize_rag_call(
+        runtime_context,
+        "rag_summarize",
+        {
+            "query": "主刷异响其他原因",
+            "information_gap": "继续更换关键词寻找更多资料",
+        },
+        "call-2",
+    )
+
+    assert blocked is not None
+    assert "已有足够" in blocked.content
+    assert runtime_context["rag_loop_closed_reason"] == "evidence_available"
+
+
 def test_tool_result_event_payload_is_redacted_and_bounded():
     result = ToolMessage(
         content="token=private " + ("结果" * 3000),
@@ -170,3 +220,16 @@ def test_tool_result_event_payload_is_redacted_and_bounded():
     assert "<redacted>" in payload["result"]
     assert payload["result_truncated"] is True
     assert len(payload["result"]) <= 4001
+
+
+def test_tool_timeout_worker_preserves_request_context():
+    with bind_request_context(request_id="req-rag-context", tenant_id="tenant-a"):
+        observed = _run_with_timeout(
+            lambda: (
+                request_context().request_id,
+                request_context().tenant_id,
+            ),
+            timeout_seconds=1,
+        )
+
+    assert observed == ("req-rag-context", "tenant-a")

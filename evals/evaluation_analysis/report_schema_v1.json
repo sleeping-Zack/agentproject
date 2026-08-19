@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-evaluation-analysis-report-v1",
+  "title": "Agent evaluation analysis report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "analysis_version",
+    "report_id",
+    "generated_at",
+    "analysis_config_sha256",
+    "input_reports",
+    "experiment",
+    "comparability",
+    "evaluator_gate",
+    "evidence",
+    "quality_comparison",
+    "performance",
+    "safety",
+    "slices",
+    "case_transitions",
+    "bad_cases",
+    "root_cause_summary",
+    "recommendations",
+    "regression_candidates",
+    "release_decision",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "analysis_version": {"type": "string", "minLength": 1},
+    "report_id": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "analysis_config_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "input_reports": {
+      "type": "object",
+      "required": ["baseline", "candidate"],
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {"$ref": "#/$defs/inputReport"},
+        "candidate": {"$ref": "#/$defs/inputReport"}
+      }
+    },
+    "experiment": {
+      "type": "object",
+      "required": ["experiment_id", "mode", "hypothesis", "change", "primary_metric"],
+      "additionalProperties": true,
+      "properties": {
+        "experiment_id": {"type": "string", "minLength": 1},
+        "mode": {"enum": ["diagnostic", "promotion"]},
+        "hypothesis": {"type": "string"},
+        "change": {"type": "string"},
+        "primary_metric": {"type": "string", "minLength": 1}
+      }
+    },
+    "comparability": {
+      "allOf": [
+        {"$ref": "#/$defs/gate"},
+        {"properties": {"status": {"enum": ["comparable", "partial", "not_comparable"]}}}
+      ]
+    },
+    "evaluator_gate": {
+      "allOf": [
+        {"$ref": "#/$defs/gate"},
+        {"properties": {"status": {"enum": ["passed", "warning", "failed"]}}}
+      ]
+    },
+    "evidence": {
+      "allOf": [
+        {"$ref": "#/$defs/gate"},
+        {
+          "type": "object",
+          "required": ["pair_count"],
+          "properties": {
+            "status": {
+              "enum": ["evaluated", "insufficient_sample", "inconclusive", "not_evaluated"]
+            },
+            "pair_count": {"type": "integer", "minimum": 0}
+          }
+        }
+      ]
+    },
+    "quality_comparison": {
+      "type": "object",
+      "required": ["pass_rate", "overall_score", "dimensions"],
+      "additionalProperties": true,
+      "properties": {
+        "pass_rate": {"$ref": "#/$defs/comparisonMetric"},
+        "overall_score": {"$ref": "#/$defs/comparisonMetric"},
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/comparisonMetric"}
+        }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "required": ["p95_latency_ms", "average_cost", "average_tokens"],
+      "additionalProperties": true,
+      "properties": {
+        "p95_latency_ms": {"$ref": "#/$defs/optionalComparisonMetric"},
+        "average_cost": {"$ref": "#/$defs/optionalComparisonMetric"},
+        "average_tokens": {"$ref": "#/$defs/optionalComparisonMetric"}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "required": ["new_failure_count"],
+      "additionalProperties": true,
+      "properties": {
+        "new_failure_count": {"type": "integer", "minimum": 0},
+        "new_veto_count": {"type": "integer", "minimum": 0},
+        "new_p0_count": {"type": "integer", "minimum": 0},
+        "new_l3_failure_count": {"type": "integer", "minimum": 0},
+        "new_failure_case_ids": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "slices": {"type": "array", "items": {"type": "object"}},
+    "case_transitions": {"type": "object"},
+    "bad_cases": {"type": "array", "items": {"type": "object"}},
+    "root_cause_summary": {
+      "oneOf": [
+        {"type": "array", "items": {"type": "object"}},
+        {"type": "object", "additionalProperties": {"type": "object"}}
+      ]
+    },
+    "recommendations": {"type": "array", "items": {"type": "object"}},
+    "regression_candidates": {
+      "type": "object",
+      "required": ["proposed", "excluded"],
+      "additionalProperties": true,
+      "properties": {
+        "proposed": {"type": "array", "items": {"type": "object"}},
+        "excluded": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "release_decision": {
+      "type": "object",
+      "required": ["status", "reasons", "requires_human_approval"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {
+          "enum": [
+            "blocked",
+            "diagnostic_only",
+            "keep_baseline",
+            "eligible_for_human_approval"
+          ]
+        },
+        "reasons": {"$ref": "#/$defs/stringArray"},
+        "requires_human_approval": {"type": "boolean"}
+      }
+    },
+    "limitations": {"$ref": "#/$defs/stringArray"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "experiment": {
+            "required": ["mode"],
+            "properties": {"mode": {"const": "promotion"}}
+          }
+        },
+        "required": ["experiment"]
+      },
+      "then": {
+        "properties": {
+          "safety": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "new_failure_count": {"type": "integer", "minimum": 0},
+              "resolved_failure_count": {"type": "integer", "minimum": 0},
+              "new_veto_count": {"type": "integer", "minimum": 0},
+              "resolved_veto_count": {"type": "integer", "minimum": 0},
+              "new_l3_failure_count": {"type": "integer", "minimum": 0},
+              "new_p0_count": {"type": "integer", "minimum": 0},
+              "resolved_p0_count": {"type": "integer", "minimum": 0}
+            }
+          },
+          "case_transitions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "improved": {"type": "integer", "minimum": 0},
+              "regressed": {"type": "integer", "minimum": 0},
+              "unchanged": {"type": "integer", "minimum": 0}
+            }
+          },
+          "bad_cases": {"maxItems": 0},
+          "recommendations": {"maxItems": 0},
+          "regression_candidates": {
+            "properties": {
+              "proposed": {"maxItems": 0},
+              "excluded": {"maxItems": 0}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "stringArray": {"type": "array", "items": {"type": "string"}},
+    "inputReport": {
+      "type": "object",
+      "required": ["sha256", "identity"],
+      "additionalProperties": true,
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "identity": {"type": "object"}
+      }
+    },
+    "gate": {
+      "type": "object",
+      "required": ["status", "reasons", "warnings"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {"type": "string", "minLength": 1},
+        "reasons": {"$ref": "#/$defs/stringArray"},
+        "warnings": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "comparisonMetric": {
+      "type": "object",
+      "required": ["baseline", "candidate", "delta"],
+      "additionalProperties": true,
+      "properties": {
+        "baseline": {"type": ["number", "null"]},
+        "candidate": {"type": ["number", "null"]},
+        "delta": {"type": ["number", "null"]},
+        "p_value": {"type": "number", "minimum": 0, "maximum": 1},
+        "two_sided_p_value": {"type": "number", "minimum": 0, "maximum": 1},
+        "confidence_interval": {
+          "type": "object",
+          "required": ["lower", "upper"],
+          "properties": {
+            "level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1},
+            "lower": {"type": "number"},
+            "upper": {"type": "number"}
+          }
+        }
+      }
+    },
+    "optionalComparisonMetric": {
+      "oneOf": [
+        {"$ref": "#/$defs/comparisonMetric"},
+        {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {"const": "not_available"},
+            "reason": {"type": "string"}
+          }
+        }
+      ]
+    }
+  }
+}

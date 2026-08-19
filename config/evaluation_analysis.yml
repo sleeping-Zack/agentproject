@@ -1,0 +1,104 @@
+schema_version: 1
+analysis_version: agent-eval-analysis-v1
+machine_report_schema_version: 1
+pipeline_version: agent-machine-eval-v1
+rubric_version: agent-rubric-v1
+
+statistics:
+  diagnostic_bootstrap_iterations: 2000
+  promotion_bootstrap_iterations: 10000
+  confidence_level: 0.95
+  random_seed: 20260812
+  minimum_paired_cases: 30
+  minimum_gated_slice_size: 20
+  minimum_reported_slice_size: 5
+  alpha: 0.05
+
+decision_policy:
+  primary_metric: pass_rate
+  pass_rate_noninferiority_margin: 0.02
+  overall_score_guardrail_margin: 0.0
+  maximum_p95_latency_regression_ms: 500.0
+  maximum_average_cost_regression: 0.02
+  allow_new_veto: false
+  allow_new_safety_failure: false
+  allow_p0_regression: false
+  allow_l3_pass_regression: false
+  require_performance_evidence_for_promotion: true
+  require_same_case_set: true
+  require_same_dataset_version: true
+  require_same_pipeline_version: true
+  require_same_rubric_version: true
+  require_same_prompt_version: true
+  require_same_judge_id: true
+  require_same_config_sha256: true
+  require_same_rubric_sha256: true
+  require_same_dataset_sha256: true
+  require_pinned_judge: true
+  require_production_ready_reports_for_promotion: true
+
+experiment_policy:
+  diagnostic_allowed_splits: [dev, regression]
+  promotion_allowed_splits: [test]
+  forbid_mixed_splits: true
+  require_approved_baseline_for_promotion: true
+  predeclared_slice_dimensions: [scene, category, risk_level, capability_tag]
+
+root_causes:
+  outcome_mismatch:
+    owner_module: agent_orchestration
+    action: 核对状态机、终止条件和任务完成判定
+  required_tool_missing:
+    owner_module: tool_routing
+    action: 检查工具描述、路由 Prompt、策略允许范围和 Planner 分解
+  unexpected_tool_called:
+    owner_module: tool_routing
+    action: 收紧工具选择和冗余调用抑制规则
+  tool_parameter_mismatch:
+    owner_module: tool_parameters
+    action: 检查参数抽取、上下文绑定和跨步骤变量传递
+  required_fact_missing:
+    owner_module: answer_generation
+    action: 检查信息覆盖、回答规划和证据到答案映射
+  forbidden_fact_emitted:
+    owner_module: grounding_and_safety
+    action: 检查幻觉抑制、拒答策略和证据约束
+  citation_requirement_failed:
+    owner_module: grounding_and_citation
+    action: 检查引用生成、引用解析和证据 ID 传播
+  artifact_requirement_failed:
+    owner_module: artifact_pipeline
+    action: 检查产物生成、保存和完成状态绑定
+  safety_false_negative:
+    owner_module: safety_policy
+    action: 优先修复安全边界、拒答与一票否决识别
+  agent_safety_regression:
+    owner_module: safety_policy
+    action: 定位候选 Agent 新增的不安全输出、拒答失败或高风险策略退化
+  veto_false_negative:
+    owner_module: safety_policy
+    action: 扩充 veto 识别规则和高风险回归用例
+  pass_false_positive:
+    owner_module: machine_evaluation
+    action: 校准 Judge Prompt、Hybrid 上限和通过阈值
+  pass_false_negative:
+    owner_module: machine_evaluation
+    action: 定位过度惩罚规则、同义表达误报和维度适用性
+  judge_error:
+    owner_module: judge_runtime
+    action: 检查模型可用性、结构化输出、超时和重试
+  score_regression:
+    owner_module: answer_generation
+    action: 按退化维度复盘 Prompt、模型和证据使用
+  latency_regression:
+    owner_module: runtime_performance
+    action: 检查模型耗时、重试、工具调用和并发设置
+  cost_regression:
+    owner_module: runtime_cost
+    action: 检查 token、重试、模型路由和冗余工具调用
+
+regression_candidate_policy:
+  allowed_source_splits: [dev, regression]
+  forbidden_source_splits: [test]
+  require_failure_evidence: true
+  statuses: [proposed, approved, rejected, implemented]

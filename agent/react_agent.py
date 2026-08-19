@@ -132,7 +132,7 @@ class ReactAgent:
             max_messages=max_messages,
             store=store,
             summarizer=summarizer,
-            max_context_tokens=int(os.getenv("AGENT_MEMORY_CONTEXT_TOKENS", "6000")),
+            max_context_tokens=int(os.getenv("AGENT_MEMORY_CONTEXT_TOKENS", "10000")),
             summary_store=durable_memory_store,
             long_term_memory=self.long_term_memory,
         )
@@ -164,15 +164,28 @@ class ReactAgent:
         executor = PlanExecutor(max_workers=4)
 
         def handle_weather(task: SubTask) -> SubTaskResult:
-            city = tool_data_service.get_user_location()
-            content = tool_data_service.get_weather(city)
+            context = task.args.get("_execution_context") or {}
+            city = str(task.args.get("city") or tool_data_service.get_user_location())
+            content = self._run_planner_tool(
+                context.get("request_id"),
+                "get_weather",
+                {"city": city},
+                lambda: tool_data_service.get_weather(city),
+            )
             return SubTaskResult(id=task.id, kind=task.kind, success=True, content=content)
 
         def handle_rag(task: SubTask) -> SubTaskResult:
             context = task.args.get("_execution_context") or {}
-            result = rag.rag_summarize_result(
-                self._query_with_dependency_results(task),
-                tenant_id=context.get("tenant_id"),
+            rag_query = self._query_with_dependency_results(task)
+            result = self._run_planner_tool(
+                context.get("request_id"),
+                "rag_summarize",
+                {"query": rag_query},
+                lambda: rag.rag_summarize_result(
+                    rag_query,
+                    tenant_id=context.get("tenant_id"),
+                ),
+                result_text=lambda value: value.answer,
             )
             self._record_plan_evidence(context.get("request_id"), result.evidence)
             content = self._replace_numeric_citations(result.answer, result.evidence)
@@ -187,7 +200,9 @@ class ReactAgent:
                 success=success,
                 content=content,
                 error=(
-                    ",".join(verification.get("reasons") or ())
+                    "rag_empty"
+                    if result.business_status == "empty"
+                    else ",".join(verification.get("reasons") or ())
                     if not success
                     else None
                 ),
@@ -198,7 +213,12 @@ class ReactAgent:
             workflow = ReportWorkflow(tool_service=tool_data_service, rag_service=rag)
             state = workflow.run(
                 task.args.get("query", ""),
-                user_id=context.get("data_user_id") or context.get("user_id"),
+                user_id=(
+                    task.args.get("user_id")
+                    or context.get("data_user_id")
+                    or context.get("user_id")
+                ),
+                month=task.args.get("month"),
                 tenant_id=context.get("tenant_id"),
                 intent="report",
             )
@@ -260,6 +280,32 @@ class ReactAgent:
             replanner=Replanner(),
             max_replans=1,
         )
+
+    @staticmethod
+    def _run_planner_tool(
+        request_id: str | None,
+        tool_name: str,
+        args: dict,
+        handler,
+        *,
+        result_text=str,
+    ):
+        if not request_id:
+            return handler()
+        with trace_recorder.span(
+            request_id,
+            category="tool",
+            name=tool_name,
+            metadata={"redacted_args": dict(args)},
+        ) as event:
+            result = handler()
+            text = str(result_text(result))
+            event.metadata["result"] = text[:4000]
+            event.metadata["result_truncated"] = len(text) > 4000
+            business_status = getattr(result, "business_status", None)
+            if business_status:
+                event.metadata["business_status"] = str(business_status)
+            return result
 
     @staticmethod
     def _query_with_dependency_results(task: SubTask) -> str:

@@ -77,7 +77,8 @@ def test_citation_placeholder_is_not_treated_as_a_citation():
 
 
 def test_partial_claim_support_exposes_coverage_and_unsupported_rate():
-    result = AnswerVerifier().verify(
+    # 显式使用严格阈值，验证 unsupported_claim_rate 标志行为，不依赖放宽后的默认值 0.5
+    result = AnswerVerifier(max_unsupported_claim_rate=0.05).verify(
         query="如何维护设备",
         answer="滤网每周清理，电池续航十小时。",
         evidence=[

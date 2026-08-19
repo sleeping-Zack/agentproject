@@ -209,6 +209,7 @@ def test_rag_refuses_generated_claim_that_is_not_grounded_in_evidence():
     result = service.rag_summarize_result("滤网如何维护")
 
     assert result.answer.startswith("请求未执行")
+    assert result.business_status == "verification_failed"
     assert result.verification["passed"] is False
     assert "unsupported_claim_rate_exceeded" in result.verification["reasons"]
 

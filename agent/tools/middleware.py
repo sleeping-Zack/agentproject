@@ -4,6 +4,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextvars import copy_context
 from difflib import SequenceMatcher
 from typing import Any, Callable
 
@@ -200,8 +201,15 @@ def monitor_tool(
                             "args_hash": args_hash(tool_args),
                             "redacted_args": redacted_args,
                         },
-                ):
-                    return _invoke_handler_with_approval(tool_name, request, handler)
+                ) as trace_event:
+                    result = _invoke_handler_with_approval(tool_name, request, handler)
+                    trace_event.metadata.update(_tool_result_event_payload(result))
+                    if tool_name == "rag_summarize":
+                        _record_rag_outcome(
+                            request.runtime.context,
+                            _latest_rag_outcome(request_id),
+                        )
+                    return result
             return _invoke_handler_with_approval(tool_name, request, handler)
         finally:
             if reservation is not None:
@@ -223,7 +231,12 @@ def monitor_tool(
 
     # 幂等缓存：相同 tool+args 在 TTL 窗口内复用上次结果，跳过实际调用
     cache_args = request.tool_call.get("args", {})
-    cached = tool_call_cache.get(tool_name, cache_args)
+    # RAG already has a structured semantic cache that retains evidence.  The
+    # generic ToolMessage cache stores only rendered text and would sever the
+    # evidence lineage on a cache hit.
+    cached = None if tool_name == "rag_summarize" else tool_call_cache.get(
+        tool_name, cache_args
+    )
     if cached is not None:
         metrics_registry.inc_tool_call(tool_name, status="cache_hit")
         _publish_tool_event(
@@ -261,7 +274,7 @@ def monitor_tool(
             },
         )
         # 只缓存成功的 ToolMessage；Command 类型有副作用不缓存
-        if isinstance(result, ToolMessage):
+        if isinstance(result, ToolMessage) and tool_name != "rag_summarize":
             tool_call_cache.set(tool_name, cache_args, result)
 
         if tool_name == "fill_context_for_report":
@@ -368,8 +381,21 @@ def _authorize_rag_call(
     if tool_name != "rag_summarize":
         return None
     if runtime_context.get("rag_loop_closed"):
+        reason = runtime_context.get("rag_loop_closed_reason")
+        if reason == "empty":
+            content = (
+                "知识库没有检索到可用资料，已停止继续更换关键词。"
+                "请明确说明资料不足，并向用户询问型号或必要上下文。"
+            )
+        elif reason == "evidence_available":
+            content = (
+                "已有足够的知识库 Evidence，已停止重复检索。"
+                "请立即仅依据现有证据生成最终回答。"
+            )
+        else:
+            content = "检索循环已经结束。请立即基于已有资料生成最终回答。"
         return ToolMessage(
-            content="检索循环已经结束。请立即基于已有资料生成最终回答。",
+            content=content,
             tool_call_id=tool_call_id,
             name=tool_name,
         )
@@ -438,6 +464,34 @@ def _authorize_rag_call(
         }
     )
     return None
+
+
+def _record_rag_outcome(runtime_context: dict, outcome: dict) -> None:
+    """Close the model-level RAG loop once another retrieval cannot add value."""
+
+    evidence = outcome.get("evidence") or []
+    business_status = str(outcome.get("business_status") or "")
+    if evidence:
+        runtime_context["rag_loop_closed"] = True
+        runtime_context["rag_loop_closed_reason"] = "evidence_available"
+        runtime_context["rag_evidence_count"] = len(evidence)
+    elif business_status == "empty":
+        runtime_context["rag_loop_closed"] = True
+        runtime_context["rag_loop_closed_reason"] = "empty"
+        runtime_context["rag_evidence_count"] = 0
+
+
+def _latest_rag_outcome(request_id: str | None) -> dict:
+    if not request_id:
+        return {}
+    try:
+        events = trace_recorder.export_trace(request_id).get("events", [])
+    except KeyError:
+        return {}
+    for event in reversed(events):
+        if event.get("category") == "rag" and event.get("name") == "evidence":
+            return dict(event.get("metadata") or {})
+    return {}
 
 
 def _semantic_query_key(query: str) -> str:
@@ -640,7 +694,8 @@ def _timeout_seconds(tool_name: str) -> int:
 
 def _run_with_timeout(call: Callable[[], ToolMessage | Command], timeout_seconds: int):
     executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(call)
+    context = copy_context()
+    future = executor.submit(context.run, call)
     try:
         return future.result(timeout=timeout_seconds)
     except TimeoutError:

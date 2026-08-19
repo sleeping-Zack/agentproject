@@ -30,6 +30,26 @@ class FakeBackend:
         )
 
 
+class NoToolBackend:
+    def __call__(self, task: AgentTask, state):
+        return AgentBackendResult(answer="防滑砖建议使用低水量拖地。")
+
+
+class ReportDataBackend:
+    def __call__(self, task: AgentTask, state):
+        return AgentBackendResult(
+            answer="已读取本人最近设备数据。",
+            tool_results=[
+                {
+                    "tool": "fetch_external_data",
+                    "status": "success",
+                    "args": {"user_id": "1005", "month": "2025-09"},
+                    "content": '{"status":"ok"}',
+                }
+            ],
+        )
+
+
 def _runner(tmp_path, max_steps=8, conversation_memory=None):
     return AgentRunner(
         backend=FakeBackend(),
@@ -38,6 +58,37 @@ def _runner(tmp_path, max_steps=8, conversation_memory=None):
         conversation_memory=conversation_memory,
         max_steps=max_steps,
     )
+
+
+def test_runner_rejects_answer_when_declared_required_tool_was_not_executed(tmp_path):
+    runner = AgentRunner(
+        backend=NoToolBackend(),
+        approval_store=SQLiteApprovalStore(str(tmp_path / "approvals.db")),
+        artifact_store=SQLiteArtifactStore(str(tmp_path / "artifacts.db")),
+        max_verification_retries=0,
+    )
+
+    result = runner.run(
+        AgentTask(
+            query="防滑砖地面使用注意事项",
+            request_id="req-required-rag",
+            required_tools=("rag_summarize",),
+        )
+    )
+
+    assert result.state.status == "rejected"
+    assert result.verifier is not None
+    assert result.verifier.missing_required_tools == ["rag_summarize"]
+    assert "required_tool_missing" in result.verifier.reasons
+    assert result.verifier.citation_coverage == 0.0
+
+
+def test_report_access_arguments_preserve_chinese_month_and_explicit_user():
+    args = AgentRunner._report_access_args(
+        AgentTask(query="生成用户1008在2026年7月的使用报告")
+    )
+
+    assert args == {"user_id": "1008", "month": "2026-07"}
 
 
 def test_runner_completes_and_persists_final_answer(tmp_path):
@@ -129,8 +180,8 @@ def test_semantic_route_resolves_report_scene_before_governance(tmp_path):
     )
     backend = AutoRoutingBackend(
         router=router,
-        react_backend=FakeBackend(),
-        planner_backend=FakeBackend(),
+        react_backend=ReportDataBackend(),
+        planner_backend=ReportDataBackend(),
         tool_policy=policy,
     )
     runner = AgentRunner(

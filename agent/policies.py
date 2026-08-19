@@ -838,6 +838,7 @@ class Replanner:
         non_retriable_prefixes = (
             "dependency_failed:",
             "subtask_verification_failed:",
+            "rag_empty",
             "max_steps_exceeded",
             "max_tool_calls_exceeded",
             "max_tokens_exceeded",

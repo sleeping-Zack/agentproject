@@ -869,8 +869,9 @@ class TaskPlanner:
                 pass
         return self._rule_based_plan(query)
 
-    @staticmethod
+    @classmethod
     def _plan_from_routing_decision(
+        cls,
         query: str,
         routing_decision: TaskRoutingDecision,
     ) -> List[SubTask]:
@@ -898,6 +899,7 @@ class TaskPlanner:
             else:
                 kind = "generic"
                 task_query = goal.tool_input or goal.description
+            entities = cls._extract_entities(f"{query}\n{task_query}")
             tasks.append(
                 SubTask(
                     id=goal_to_task_id[goal.id],
@@ -907,6 +909,7 @@ class TaskPlanner:
                         "query": task_query,
                         "original_query": query,
                         "required_tools": list(goal.required_tools),
+                        **entities,
                     },
                     depends_on=[
                         goal_to_task_id[dependency]
@@ -919,6 +922,7 @@ class TaskPlanner:
 
     def _rule_based_plan(self, query: str) -> List[SubTask]:
         tasks: List[SubTask] = []
+        entities = self._extract_entities(query)
         wants_report = any(kw in query for kw in self.REPORT_KEYWORDS)
         wants_weather = any(kw in query for kw in self.WEATHER_KEYWORDS)
         wants_kb = any(kw in query for kw in self.KB_KEYWORDS)
@@ -928,21 +932,21 @@ class TaskPlanner:
                 id=f"t{len(tasks)+1}",
                 kind="weather",
                 description="获取当前用户所在城市的天气",
-                args={"query": query},
+                args={"query": query, **entities},
             ))
         if wants_kb:
             tasks.append(SubTask(
                 id=f"t{len(tasks)+1}",
                 kind="rag_qa",
                 description="检索知识库回答问题",
-                args={"query": query},
+                args={"query": query, **entities},
             ))
         if wants_report:
             tasks.append(SubTask(
                 id=f"t{len(tasks)+1}",
                 kind="report",
                 description="生成本月使用报告",
-                args={"query": query},
+                args={"query": query, **entities},
             ))
         if not tasks:
             tasks.append(SubTask(
@@ -952,6 +956,38 @@ class TaskPlanner:
                 args={"query": query},
             ))
         return tasks
+
+    @staticmethod
+    def _extract_entities(query: str) -> Dict[str, str]:
+        entities: Dict[str, str] = {}
+        month = re.search(r"(?<!\d)(20\d{2})-(0?[1-9]|1[0-2])(?!\d)", query)
+        if month:
+            entities["month"] = f"{month.group(1)}-{int(month.group(2)):02d}"
+        else:
+            chinese_month = re.search(r"(?<!\d)(20\d{2})年(0?[1-9]|1[0-2])月", query)
+            if chinese_month:
+                entities["month"] = (
+                    f"{chinese_month.group(1)}-{int(chinese_month.group(2)):02d}"
+                )
+
+        user_match = re.search(
+            r"(?:用户(?:ID)?|user(?:_id)?)\s*[:：#-]?\s*([A-Za-z0-9_-]{2,64})",
+            query,
+            flags=re.IGNORECASE,
+        )
+        if user_match:
+            entities["user_id"] = user_match.group(1)
+
+        city_match = re.search(r"([\u4e00-\u9fff]{2,16}?)(?:市)?(?:的)?天气", query)
+        if city_match:
+            city = re.sub(
+                r"^(?:帮我查一下|请帮我查|查一下|查询|查看|获取|看看|帮我|请|查)+",
+                "",
+                city_match.group(1),
+            ).strip()
+            if 2 <= len(city) <= 12:
+                entities["city"] = city
+        return entities
 
 
 class PlanExecutor:
@@ -1406,6 +1442,11 @@ class PlannerAgent:
                         "kind": task.kind,
                         "description": task.description,
                         "depends_on": task.depends_on,
+                        "arguments": {
+                            key: value
+                            for key, value in task.args.items()
+                            if not key.startswith("_")
+                        },
                     }
                     for task in plan
                 ]

@@ -95,6 +95,7 @@ class VerifyResult:
     harmful_instruction: bool = False
     claim_support: List[Dict[str, Any]] = field(default_factory=list)
     invalid_citations: List[str] = field(default_factory=list)
+    missing_required_tools: List[str] = field(default_factory=list)
 
     @property
     def quality(self) -> Dict[str, Any]:
@@ -107,6 +108,7 @@ class VerifyResult:
             "harmful_instruction": self.harmful_instruction,
             "claim_support": self.claim_support,
             "invalid_citations": self.invalid_citations,
+            "missing_required_tools": self.missing_required_tools,
             "judge": self.judge,
         }
 
@@ -118,11 +120,16 @@ class AnswerVerifier:
         min_overall_score: float = 3.5,
         require_citation: bool = True,
         min_faithfulness_score: float = 4.0,
+        max_unsupported_claim_rate: float = 0.9,
     ) -> None:
         self.judge = judge
         self.min_overall_score = min_overall_score
         self.require_citation = require_citation
         self.min_faithfulness_score = min_faithfulness_score
+        # 综合/排查类回答会引用多条证据，弱语义支撑判断对这类题误伤率高（可达 ~0.8）。
+        # 真正可靠的接地信号是 citation_validity / citation_coverage（仍严格把关）；
+        # 故仅放宽不可靠的 unsupported_claim_rate 到 0.9——仅当几乎所有声明都无证据（≈1.0）才拒绝。
+        self.max_unsupported_claim_rate = max_unsupported_claim_rate
 
     def verify(
         self,
@@ -133,12 +140,38 @@ class AnswerVerifier:
         tool_results: Optional[List[Dict[str, Any]]] = None,
         artifacts: Optional[List[Dict[str, Any]]] = None,
         structured_answer: Optional[StructuredAnswer] = None,
+        required_tools: Optional[Sequence[str]] = None,
     ) -> VerifyResult:
         """Run structural, deterministic grounding, then selective semantic checks."""
 
         reasons: List[str] = []
         tool_results = tool_results or []
         artifacts = artifacts or []
+        required_tools = tuple(dict.fromkeys(str(item) for item in (required_tools or ())))
+        executed_tools = {
+            str(item.get("tool") or item.get("name") or "")
+            for item in tool_results
+            if isinstance(item, Mapping)
+        }
+        tool_aliases = {
+            "plan:rag_qa": "rag_summarize",
+            "plan:weather": "get_weather",
+            "plan:report": "fill_context_for_report",
+        }
+        executed_tools.update(
+            tool_aliases[name] for name in tuple(executed_tools) if name in tool_aliases
+        )
+        missing_required_tools = [
+            name for name in required_tools if name not in executed_tools
+        ]
+        if missing_required_tools:
+            self._add_reason(reasons, "required_tool_missing")
+        rag_attempted = any(
+            isinstance(item, Mapping)
+            and str(item.get("tool") or item.get("name") or "") == "rag_summarize"
+            for item in tool_results
+        )
+        rag_required = "rag_summarize" in required_tools
         records = self._normalise_evidence(evidence)
         evidence_by_id = {item.evidence_id: item for item in records}
         context = "\n".join(
@@ -157,7 +190,7 @@ class AnswerVerifier:
         if effective_answer.strip().startswith("请求未执行") and scene == "general":
             self._add_reason(reasons, "unexpected_refusal")
 
-        if scene in _RAG_SCENES and not records:
+        if (scene in _RAG_SCENES or rag_attempted or rag_required) and not records:
             self._add_reason(reasons, "evidence_required")
         if scene in _REPORT_SCENES and not self._has_report_support(tool_results, artifacts):
             self._add_reason(reasons, "report_support_required")
@@ -169,7 +202,12 @@ class AnswerVerifier:
             citation_refs, placeholder_citation = self._legacy_citation_refs(answer, records)
 
         resolved_citations, invalid_citations = self._resolve_references(citation_refs, records)
-        citation_required = scene in _RAG_SCENES or (self.require_citation and bool(records))
+        citation_required = (
+            scene in _RAG_SCENES
+            or rag_attempted
+            or rag_required
+            or (self.require_citation and bool(records))
+        )
         citation_validity = self._citation_validity(
             citation_refs,
             invalid_citations,
@@ -190,7 +228,9 @@ class AnswerVerifier:
             records=records,
             fallback_evidence_ids=resolved_citations,
         )
-        grounding_required = bool(records) or scene in _RAG_SCENES
+        grounding_required = (
+            bool(records) or scene in _RAG_SCENES or rag_attempted or rag_required
+        )
         support_results: List[ClaimSupport] = []
         covered_claims = 0
         unsupported_claims = 0
@@ -246,7 +286,7 @@ class AnswerVerifier:
 
         if grounding_required and citation_coverage < 0.9:
             self._add_reason(reasons, "citation_coverage_below_threshold")
-        if grounding_required and unsupported_claim_rate > 0.05:
+        if grounding_required and unsupported_claim_rate > self.max_unsupported_claim_rate:
             self._add_reason(reasons, "unsupported_claim_rate_exceeded")
 
         harmful_instruction = self._contains_harmful_instruction(verification_text)
@@ -320,6 +360,7 @@ class AnswerVerifier:
             harmful_instruction=harmful_instruction,
             claim_support=claim_support_payload,
             invalid_citations=invalid_citations,
+            missing_required_tools=missing_required_tools,
         )
 
     @staticmethod
@@ -717,6 +758,7 @@ class AnswerVerifier:
         if hard_refusal_reasons.intersection(reasons):
             return "refuse"
         retry_reasons = {
+            "required_tool_missing",
             "citation_coverage_below_threshold",
             "judge_faithfulness_below_threshold",
             "judge_score_below_threshold",

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from agent.long_term_memory import MemoryCategory, calculate_time_decay
 from agent.react_agent import ReactAgent
@@ -36,9 +36,15 @@ from observability.tracing import otel_spans_from_trace_payload, trace_recorder
 from rag.judge import LLMJudge, evaluate_batch
 from safety.auth import ADMIN_ROLES, AuthContext, resolve_auth_context
 from safety.security import UnsafeInputError, assert_safe_user_input
+from human_eval.service import HumanEvalService
+from machine_eval.judge import AgentRubricJudge
+from machine_eval.pipeline import MachineEvalPipeline
+from evaluation_analysis.service import EvaluationAnalysisService
 from services.factories import (
     create_approval_store,
     create_artifact_store,
+    create_human_eval_store,
+    create_evaluation_analysis_store,
     create_session_store,
 )
 from services.rate_limit import create_rate_limiter
@@ -57,7 +63,7 @@ async def _app_lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="Sweeper Agent API",
-    version="0.4.0",
+    version="0.5.0",
     lifespan=_app_lifespan,
 )
 _request_auth: ContextVar[Optional[AuthContext]] = ContextVar(
@@ -92,6 +98,9 @@ store = create_session_store()
 agent = ReactAgent(session_store=store)
 approval_store = create_approval_store()
 artifact_store = create_artifact_store()
+human_eval_service = HumanEvalService(create_human_eval_store())
+evaluation_analysis_service = EvaluationAnalysisService()
+evaluation_analysis_store = create_evaluation_analysis_store()
 runtime_tool_policy = ToolPolicy(tool_registry=tool_registry)
 harness_runner = AgentRunner(
     backend=AutoRoutingBackend(
@@ -258,6 +267,120 @@ class JudgeRequest(BaseModel):
     cases: List[JudgeCase]
 
 
+class HumanEvalItemRequest(BaseModel):
+    case_id: str = Field(..., min_length=1, max_length=200)
+    query: str = Field(..., min_length=1)
+    turns: List[Dict] = Field(default_factory=list)
+    scene: str = ""
+    risk_level: str = ""
+    capability_tags: List[str] = Field(default_factory=list)
+    context: Dict = Field(default_factory=dict)
+    agent_answer: str
+    trace: List[Dict] = Field(default_factory=list)
+    evidence: List[Dict] = Field(default_factory=list)
+    references: List[Dict] = Field(default_factory=list)
+    policy_context: Dict = Field(default_factory=dict)
+    oracle: Dict = Field(default_factory=dict)
+
+
+class HumanEvalBatchRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    dataset_version: str = Field(..., min_length=1, max_length=100)
+    reviewer_ids: List[str] = Field(..., min_length=2)
+    qc_rate: float = Field(default=0.10, ge=0.0, le=1.0)
+    seed: int = 20260811
+    items: List[HumanEvalItemRequest] = Field(..., min_length=1)
+
+
+class HumanEvalAnnotationRequest(BaseModel):
+    valid: bool
+    invalid_reason: Optional[str] = None
+    scores: Dict[str, Optional[StrictInt]]
+    vetoes: List[str] = Field(default_factory=list)
+    rationales: Dict[str, str] = Field(default_factory=dict)
+    confidence: Literal["high", "medium", "low"]
+    duration_seconds: float = Field(..., gt=0, le=86400)
+
+
+class HumanEvalQcRequest(BaseModel):
+    decision: Literal["accepted", "returned"]
+    note: str = Field(..., min_length=1)
+    returned_assignment_ids: List[str] = Field(default_factory=list)
+
+
+class MachineEvalRunRequest(BaseModel):
+    items: List[Dict] = Field(..., min_length=1, max_length=500)
+    judge_enabled: bool = True
+    judge_id: str = Field(default="configured-chat-model", min_length=1, max_length=100)
+    judge_timeout_seconds: float = Field(default=45.0, gt=0, le=300)
+    human_export: Optional[Dict] = None
+    baseline: Optional[Dict] = None
+    run_metadata: Dict = Field(default_factory=dict)
+
+
+class EvaluationExperimentRequest(BaseModel):
+    experiment_id: str = Field(..., min_length=1, max_length=128)
+    mode: Literal["diagnostic", "promotion"]
+    hypothesis: str = Field(..., min_length=1, max_length=2000)
+    change: str = Field(..., min_length=1, max_length=2000)
+    primary_metric: Literal["pass_rate"] = "pass_rate"
+    predeclared_slices: List[
+        Literal["scene", "category", "risk_level", "capability_tag"]
+    ] = Field(
+        default_factory=lambda: [
+            "scene",
+            "category",
+            "risk_level",
+            "capability_tag",
+        ]
+    )
+
+
+class EvaluationAnalysisCompareRequest(BaseModel):
+    baseline_report: Dict
+    candidate_report: Dict
+    experiment: EvaluationExperimentRequest
+    baseline_approval_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    report_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    persist: bool = True
+
+
+class EvaluationBaselineApprovalRequest(BaseModel):
+    baseline_report: Dict
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+
+def _validate_analysis_report_size(report: Dict, name: str) -> None:
+    cases = report.get("cases")
+    if not isinstance(cases, list):
+        raise ValueError(f"{name}_report.cases must be an array")
+    if not 1 <= len(cases) <= 500:
+        raise ValueError(f"{name}_report.cases must contain between 1 and 500 items")
+
+
+def _trusted_baseline_approval(
+    approval_id: Optional[str], *, tenant_id: str, baseline_report: Dict
+) -> Optional[Dict]:
+    if approval_id is None:
+        return None
+    approval = _load_tenant_approval(approval_id, tenant_id)
+    if not approval.is_approved:
+        raise ValueError("baseline approval is not approved")
+    if approval.tool_name != "evaluation_analysis_baseline":
+        raise ValueError("approval is not for an evaluation-analysis baseline")
+    expected_digest = evaluation_analysis_service.report_sha256(baseline_report)
+    if approval.args.get("report_sha256") != expected_digest:
+        raise ValueError("baseline approval digest does not match the submitted report")
+    if not approval.decided_by or not approval.decided_at:
+        raise ValueError("baseline approval decision is incomplete")
+    return {
+        "status": "approved",
+        "approver": approval.decided_by,
+        "approved_at": approval.decided_at,
+        "report_sha256": expected_digest,
+    }
+
+
 def _expected_api_key() -> str:
     return os.getenv("AGENT_API_KEY", "dev-api-key")
 
@@ -333,6 +456,22 @@ def _resolve_tenant(body_tenant: Optional[str], header_tenant: Optional[str]) ->
 def _require_approval_operator(context: AuthContext) -> None:
     if context.user_role not in ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="approval requires operator/admin role")
+
+
+def _require_human_eval_operator(context: AuthContext) -> None:
+    if context.user_role not in ADMIN_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="human evaluation operation requires operator/admin role",
+        )
+
+
+def _raise_human_eval_error(exc: Exception) -> None:
+    if isinstance(exc, KeyError):
+        raise HTTPException(status_code=404, detail="human evaluation resource not found") from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise exc
 
 
 def _require_memory_user_id(principal_id: Optional[str]) -> str:
@@ -966,6 +1105,443 @@ async def deny_approval(
     _rate_limit(raw_request, tenant_id)
     _load_tenant_approval(approval_id, tenant_id)
     return approval_store.deny(approval_id, auth.principal_id).__dict__
+
+
+@app.post("/human-eval/batches")
+async def create_human_eval_batch(
+    request: HumanEvalBatchRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.create_batch(
+            tenant_id=auth.tenant_id,
+            created_by=auth.principal_id,
+            name=request.name,
+            dataset_version=request.dataset_version,
+            reviewer_ids=request.reviewer_ids,
+            qc_rate=request.qc_rate,
+            seed=request.seed,
+            items=[item.model_dump() for item in request.items],
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/human-eval/batches/{batch_id}")
+async def get_human_eval_progress(
+    batch_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.progress(batch_id=batch_id, tenant_id=auth.tenant_id)
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/human-eval/batches/{batch_id}/tasks/next")
+async def claim_human_eval_task(
+    batch_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        task = human_eval_service.next_task(
+            batch_id=batch_id,
+            tenant_id=auth.tenant_id,
+            reviewer_id=auth.principal_id,
+        )
+        return {"task": task}
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.post("/human-eval/tasks/{assignment_id}/submit")
+async def submit_human_eval_annotation(
+    assignment_id: str,
+    request: HumanEvalAnnotationRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.submit(
+            assignment_id=assignment_id,
+            tenant_id=auth.tenant_id,
+            reviewer_id=auth.principal_id,
+            submission=request.model_dump(),
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/human-eval/batches/{batch_id}/disagreements")
+async def get_human_eval_disagreements(
+    batch_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> List[Dict]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.disagreements(
+            batch_id=batch_id, tenant_id=auth.tenant_id
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.post("/human-eval/batches/{batch_id}/items/{item_id}/adjudicate")
+async def adjudicate_human_eval_item(
+    batch_id: str,
+    item_id: str,
+    request: HumanEvalAnnotationRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.adjudicate(
+            batch_id=batch_id,
+            tenant_id=auth.tenant_id,
+            item_id=item_id,
+            adjudicator_id=auth.principal_id,
+            submission=request.model_dump(),
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/human-eval/batches/{batch_id}/qc")
+async def get_human_eval_qc_queue(
+    batch_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> List[Dict]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.qc_queue(batch_id=batch_id, tenant_id=auth.tenant_id)
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.post("/human-eval/batches/{batch_id}/items/{item_id}/qc")
+async def review_human_eval_qc(
+    batch_id: str,
+    item_id: str,
+    request: HumanEvalQcRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.review_qc(
+            batch_id=batch_id,
+            tenant_id=auth.tenant_id,
+            item_id=item_id,
+            reviewer_id=auth.principal_id,
+            decision=request.decision,
+            note=request.note,
+            returned_assignments=request.returned_assignment_ids,
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/human-eval/batches/{batch_id}/report")
+async def get_human_eval_report(
+    batch_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.report(batch_id=batch_id, tenant_id=auth.tenant_id)
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/human-eval/batches/{batch_id}/export")
+async def export_human_eval_labels(
+    batch_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.export(batch_id=batch_id, tenant_id=auth.tenant_id)
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/human-eval/batches/{batch_id}/audit")
+async def get_human_eval_audit_events(
+    batch_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> List[Dict]:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.audit_events(
+            batch_id=batch_id, tenant_id=auth.tenant_id
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.post("/human-eval/batches/{batch_id}/close")
+async def close_human_eval_batch(
+    batch_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return human_eval_service.close_batch(
+            batch_id=batch_id,
+            tenant_id=auth.tenant_id,
+            actor_id=auth.principal_id,
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.post("/machine-eval/runs")
+async def run_machine_evaluation(
+    request: MachineEvalRunRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    judge = (
+        AgentRubricJudge(
+            timeout_seconds=request.judge_timeout_seconds,
+            judge_id=request.judge_id,
+        )
+        if request.judge_enabled
+        else None
+    )
+    try:
+        return await asyncio.to_thread(
+            MachineEvalPipeline(judge=judge).evaluate,
+            request.items,
+            human_export=request.human_export,
+            baseline=request.baseline,
+            run_metadata={
+                **request.run_metadata,
+                "tenant_id": auth.tenant_id,
+                "requested_by": auth.principal_id,
+            },
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.post("/evaluation-analysis/compare")
+async def compare_evaluation_reports(
+    request: EvaluationAnalysisCompareRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        _validate_analysis_report_size(request.baseline_report, "baseline")
+        _validate_analysis_report_size(request.candidate_report, "candidate")
+        baseline_approval = _trusted_baseline_approval(
+            request.baseline_approval_id,
+            tenant_id=auth.tenant_id,
+            baseline_report=request.baseline_report,
+        )
+        report = await asyncio.to_thread(
+            evaluation_analysis_service.analyze,
+            request.baseline_report,
+            request.candidate_report,
+            experiment=request.experiment.model_dump(),
+            baseline_approval=baseline_approval,
+            report_id=request.report_id,
+        )
+        if request.persist:
+            await asyncio.to_thread(
+                evaluation_analysis_store.save_report,
+                auth.tenant_id,
+                report,
+            )
+        return report
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.post("/evaluation-analysis/baseline-approvals")
+async def request_evaluation_baseline_approval(
+    request: EvaluationBaselineApprovalRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        _validate_analysis_report_size(request.baseline_report, "baseline")
+        digest = evaluation_analysis_service.validate_baseline_for_approval(
+            request.baseline_report
+        )
+        approval = approval_store.create_pending(
+            request_id=request.request_id or f"evaluation-baseline:{digest}",
+            tenant_id=auth.tenant_id,
+            user_role=auth.user_role,
+            tool_name="evaluation_analysis_baseline",
+            args={"report_sha256": digest},
+            reason="approve immutable phase-four baseline for promotion comparison",
+            principal_id=auth.principal_id,
+        )
+        return approval.__dict__
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/evaluation-analysis/reports")
+async def list_evaluation_analysis_reports(
+    raw_request: Request,
+    experiment_id: Optional[str] = None,
+    limit: int = 50,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        reports = await asyncio.to_thread(
+            evaluation_analysis_store.list_reports,
+            auth.tenant_id,
+            experiment_id,
+            limit,
+        )
+        return {"reports": reports}
+    except ValueError as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/evaluation-analysis/reports/{report_id}")
+async def get_evaluation_analysis_report(
+    report_id: str,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return await asyncio.to_thread(
+            evaluation_analysis_store.get_report,
+            auth.tenant_id,
+            report_id,
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_human_eval_error(exc)
+
+
+@app.get("/evaluation-analysis/experiments/{experiment_id}/trend")
+async def get_evaluation_experiment_trend(
+    experiment_id: str,
+    raw_request: Request,
+    limit: int = 20,
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    x_user_role: Optional[str] = Header(default=None, alias="X-User-Role"),
+    x_principal_id: Optional[str] = Header(default=None, alias="X-Principal-ID"),
+) -> Dict:
+    auth = _auth_context(x_api_key, x_tenant_id, x_user_role, x_principal_id)
+    _require_human_eval_operator(auth)
+    _rate_limit(raw_request, auth.tenant_id)
+    try:
+        return await asyncio.to_thread(
+            evaluation_analysis_store.trend,
+            auth.tenant_id,
+            experiment_id,
+            limit,
+        )
+    except ValueError as exc:
+        _raise_human_eval_error(exc)
 
 
 @app.get("/artifacts/{request_id}")

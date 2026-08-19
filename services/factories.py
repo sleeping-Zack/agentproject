@@ -6,6 +6,8 @@ from services.approval_store import SQLiteApprovalStore
 from services.artifact_store import SQLiteArtifactStore
 from services.persistence import SQLiteStore
 from services.memory_store import PostgresMemoryStore, SQLiteMemoryStore
+from services.human_eval_store import SQLiteHumanEvalStore
+from services.evaluation_analysis_store import SQLiteEvaluationAnalysisStore
 from services.postgres import (
     PostgresApprovalStore,
     PostgresArtifactStore,
@@ -66,4 +68,19 @@ def create_artifact_store():
         return PostgresArtifactStore(_database_url())
     return SQLiteArtifactStore(
         os.getenv("AGENT_ARTIFACT_DB_PATH", "storage/artifacts.db")
+    )
+
+
+def create_human_eval_store():
+    return SQLiteHumanEvalStore(
+        os.getenv("AGENT_HUMAN_EVAL_DB_PATH", "storage/human_eval.db")
+    )
+
+
+def create_evaluation_analysis_store():
+    return SQLiteEvaluationAnalysisStore(
+        os.getenv(
+            "AGENT_EVALUATION_ANALYSIS_DB_PATH",
+            "storage/evaluation_analysis.db",
+        )
     )

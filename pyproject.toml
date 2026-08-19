@@ -63,6 +63,9 @@ include = [
     "rag*",
     "safety*",
     "services*",
+    "human_eval*",
+    "machine_eval*",
+    "evaluation_analysis*",
     "utils*",
 ]
 exclude = [

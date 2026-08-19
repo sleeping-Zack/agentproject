@@ -4,6 +4,7 @@ from app import (
     NAVIGATION,
     QUICK_PROMPTS,
     _audit_event,
+    _evaluation_artifact_sections,
     _event_detail,
     _event_label,
     _inject_theme,
@@ -22,7 +23,7 @@ def test_merge_answer_appends_regular_delta():
 
 
 def test_primary_navigation_keeps_complex_tasks_inside_chat():
-    assert list(NAVIGATION) == ["对话", "记忆", "审批", "诊断"]
+    assert list(NAVIGATION) == ["对话", "记忆", "审批", "人工评测", "诊断"]
     assert "planner" not in NAVIGATION.values()
     assert len(QUICK_PROMPTS) == 4
     assert all("租户" not in label and "ID" not in label for label, _ in QUICK_PROMPTS)
@@ -145,6 +146,62 @@ def test_verification_detail_exposes_quality_result():
     assert detail["是否通过"] is False
     assert detail["未通过原因"] == ["citation_missing"]
     assert detail["引用覆盖率"] == 0.5
+
+
+def test_human_eval_artifacts_separate_approvals_plans_and_actual_tools():
+    payload = {
+        "approval_records": [{"approval_id": "approval-1", "status": "approved"}],
+        "planner_steps": [{"id": "t1", "kind": "weather", "city": "杭州"}],
+        "tool_calls": [
+            {"tool_name": "get_weather", "args": {"city": "杭州"}, "status": "success"}
+        ],
+        "trace": [
+            {"category": "planner", "name": "plan"},
+            {"category": "tool", "name": "get_weather"},
+            {"category": "diagnostic", "name": "verifier"},
+        ],
+    }
+
+    sections = _evaluation_artifact_sections(payload)
+
+    assert sections["approval_records"][0]["approval_id"] == "approval-1"
+    assert sections["planner_steps"][0]["id"] == "t1"
+    assert sections["tool_calls"][0]["tool_name"] == "get_weather"
+    assert sections["other_trace"] == [
+        {"category": "diagnostic", "name": "verifier"}
+    ]
+
+
+def test_human_eval_artifacts_keep_legacy_trace_visible_in_separate_sections():
+    sections = _evaluation_artifact_sections(
+        {
+            "trace": [
+                {
+                    "category": "planner",
+                    "name": "plan",
+                    "metadata": {"task_count": 2},
+                },
+                {
+                    "category": "tool",
+                    "name": "get_weather",
+                    "metadata": {
+                        "redacted_args": {"city": "杭州"},
+                        "result": "杭州晴",
+                    },
+                },
+            ]
+        }
+    )
+
+    assert sections["planner_steps"][0]["event"] == "plan"
+    assert sections["tool_calls"] == [
+        {
+            "tool_name": "get_weather",
+            "args": {"city": "杭州"},
+            "status": "success",
+            "result": "杭州晴",
+        }
+    ]
 
 
 def test_sidebar_controls_remain_available_after_collapse():

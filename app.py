@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import html
+import json
 import os
+import time
 from uuid import uuid4
 
 import streamlit as st
 from dotenv import load_dotenv
 
+from human_eval.rubric import RubricEvaluator
 from services.frontend_api import AgentApiClient, AgentApiError
 
 
@@ -26,7 +29,34 @@ NAVIGATION = {
     "对话": "chat",
     "记忆": "memory",
     "审批": "operations",
+    "人工评测": "human_eval",
     "诊断": "observability",
+}
+
+SCORE_LABELS = {
+    0: "0 · 未达标",
+    1: "1 · 部分达标",
+    2: "2 · 基本达标",
+    3: "3 · 完全达标",
+}
+
+INVALID_REASON_LABELS = {
+    "missing_input": "缺少必要输入",
+    "missing_trace": "缺少必要工具轨迹",
+    "missing_reference": "缺少判分所需参考资料",
+    "conflicting_reference": "参考资料互相冲突",
+    "corrupted_output": "Agent 输出损坏",
+    "wrong_case_mapping": "案例与运行结果映射错误",
+}
+
+DIMENSION_NAME_BY_ID = {
+    "task_completion": "任务完成度",
+    "factual_correctness": "事实正确性",
+    "tool_use": "工具使用",
+    "instruction_following": "指令遵循",
+    "groundedness": "依据忠实度与引用",
+    "safety": "安全性",
+    "response_quality": "回复质量",
 }
 
 EXECUTION_MODE_LABELS = {
@@ -457,6 +487,10 @@ def _init_state() -> None:
         "connection_error": "",
         "navigation": "对话",
         "pending_navigation": "",
+        "human_eval_batch_id": "",
+        "human_eval_loaded_batch_id": "",
+        "human_eval_task": None,
+        "human_eval_task_started_at": 0.0,
         "api_key": os.getenv("AGENT_API_KEY", "dev-api-key"),
         "bearer_token": os.getenv("AGENT_UI_BEARER_TOKEN", ""),
         "tenant_id": os.getenv("AGENT_UI_TENANT_ID", "tenant-a"),
@@ -814,7 +848,7 @@ def _sidebar_client() -> tuple[str, AgentApiClient] | None:
                         st.session_state.session_id = session_id
                         st.session_state.chat_messages = payload.get("messages", [])
                         st.session_state.last_request_id = ""
-                        st.session_state.navigation = "对话"
+                        st.session_state.pending_navigation = "对话"
                         st.rerun()
                     except AgentApiError as exc:
                         st.sidebar.error(f"恢复失败：{exc}")
@@ -1351,7 +1385,7 @@ def _render_operations(client: AgentApiClient) -> None:
                             st.session_state.session_id = pending_request["session_id"]
                             st.session_state.queued_prompt = pending_request["prompt"]
                             st.session_state.queued_approval_id = approval_id
-                            st.session_state.navigation = "对话"
+                            st.session_state.pending_navigation = "对话"
                             st.rerun()
                         if status == "pending":
                             st.info("请由 operator/admin 使用其独立凭证进入本页审批。")
@@ -1376,6 +1410,464 @@ def _render_operations(client: AgentApiClient) -> None:
                     st.json(client.artifact(artifact_id))
                 except AgentApiError as exc:
                     st.error(f"查询失败：{exc}")
+
+
+def _claim_human_eval_task(client: AgentApiClient, batch_id: str) -> None:
+    task = client.next_human_eval_task(batch_id)
+    st.session_state.human_eval_task = task
+    st.session_state.human_eval_task_started_at = time.monotonic() if task else 0.0
+
+
+def _evaluation_artifact_sections(payload: dict) -> dict:
+    trace = list(payload.get("trace") or [])
+    planner_steps = list(payload.get("planner_steps") or [])
+    if not planner_steps:
+        planner_steps = [
+            {
+                "event": event.get("name"),
+                **dict(event.get("metadata") or {}),
+            }
+            for event in trace
+            if event.get("category") == "planner"
+        ]
+    tool_calls = list(payload.get("tool_calls") or [])
+    if not tool_calls:
+        tool_calls = [
+            {
+                "tool_name": event.get("name"),
+                "args": dict((event.get("metadata") or {}).get("redacted_args") or {}),
+                "status": (
+                    "error"
+                    if event.get("error")
+                    else str((event.get("metadata") or {}).get("business_status") or "success")
+                ),
+                "result": str((event.get("metadata") or {}).get("result") or ""),
+            }
+            for event in trace
+            if event.get("category") == "tool"
+        ]
+    return {
+        "approval_records": list(payload.get("approval_records") or []),
+        "planner_steps": planner_steps,
+        "tool_calls": tool_calls,
+        "other_trace": [
+            event
+            for event in trace
+            if event.get("category") not in {"approval", "planner", "tool"}
+            and event.get("name") != "approval_required"
+        ],
+    }
+
+
+def _render_evaluation_material(payload: dict) -> None:
+    st.markdown("#### 用户问题")
+    st.write(payload.get("query") or "（空）")
+
+    turns = payload.get("turns") or []
+    if turns:
+        with st.expander("多轮对话上下文", expanded=False):
+            st.json(turns, expanded=True)
+
+    st.markdown("#### Agent 回答")
+    st.info(str(payload.get("agent_answer") or "（空回答）"))
+
+    metadata = {
+        "场景": payload.get("scene") or "未标注",
+        "风险等级": payload.get("risk_level") or "未标注",
+        "能力标签": "、".join(payload.get("capability_tags") or []) or "无",
+    }
+    st.caption(" · ".join(f"{key}：{value}" for key, value in metadata.items()))
+
+    artifacts = _evaluation_artifact_sections(payload)
+    execution_sections = (
+        ("审批记录", "approval_records"),
+        ("Planner 步骤", "planner_steps"),
+        ("真实工具调用", "tool_calls"),
+        ("其他运行轨迹", "other_trace"),
+    )
+    for title, key in execution_sections:
+        value = artifacts[key]
+        if value:
+            with st.expander(title, expanded=key in {"planner_steps", "tool_calls"}):
+                st.json(value, expanded=True)
+
+    material_sections = (
+        ("案例上下文", "context"),
+        ("证据", "evidence"),
+        ("参考资料", "references"),
+        ("策略上下文", "policy_context"),
+    )
+    for title, key in material_sections:
+        value = payload.get(key)
+        if value:
+            with st.expander(title, expanded=key in {"trace", "evidence"}):
+                st.json(value, expanded=True)
+
+
+def _build_human_eval_submission(task: dict) -> tuple[dict, list[str]]:
+    rubric = task["rubric"]
+    assignment_id = task["assignment_id"]
+    prefix = f"human_eval_{assignment_id}"
+    timer_key = f"{prefix}_started_at"
+    st.session_state.setdefault(timer_key, time.monotonic())
+    valid = st.radio(
+        "案例材料是否足以判分？",
+        [True, False],
+        format_func=lambda value: "可以判分" if value else "无法判分",
+        horizontal=True,
+        key=f"{prefix}_valid",
+    )
+
+    errors: list[str] = []
+    scores = {}
+    vetoes: list[str] = []
+    rationales = {}
+    invalid_reason = None
+
+    if not valid:
+        invalid_reasons = rubric.get("invalid_case_reasons") or []
+        invalid_reason = st.selectbox(
+            "无法判分的原因",
+            invalid_reasons,
+            format_func=lambda value: INVALID_REASON_LABELS.get(value, value),
+            key=f"{prefix}_invalid_reason",
+        )
+        validity_reason = st.text_area(
+            "请指出缺失或冲突的材料（必填）",
+            key=f"{prefix}_validity_reason",
+            max_chars=500,
+        )
+        if not validity_reason.strip():
+            errors.append("无法判分时需要填写具体原因")
+        rationales["validity"] = validity_reason.strip()
+        scores = {item["id"]: None for item in rubric["dimensions"]}
+    else:
+        st.markdown("#### 选择 7 个维度的分数")
+        st.caption("2 分表示核心结果可用但有轻微问题；3 分表示无需用户修正。0/1 分需补一句可定位的依据。")
+        for dimension in rubric["dimensions"]:
+            dimension_id = dimension["id"]
+            options = ["unselected", 0, 1, 2, 3]
+            if not dimension.get("always_applicable"):
+                options.append(None)
+            with st.container(border=True):
+                st.markdown(f"**{dimension['name']}**")
+                st.caption(str(dimension.get("question") or ""))
+                score = st.radio(
+                    dimension["name"],
+                    options,
+                    index=0,
+                    horizontal=True,
+                    format_func=lambda value: (
+                        "请选择"
+                        if value == "unselected"
+                        else "不适用"
+                        if value is None
+                        else SCORE_LABELS[value]
+                    ),
+                    label_visibility="collapsed",
+                    key=f"{prefix}_score_{dimension_id}",
+                )
+                if score == "unselected":
+                    errors.append(f"请选择{dimension['name']}的分数")
+                    scores[dimension_id] = None
+                else:
+                    scores[dimension_id] = score
+                with st.expander("查看本维度 0–3 分标准"):
+                    for anchor_score, description in dimension["anchors"].items():
+                        st.markdown(f"**{anchor_score} 分**：{description}")
+                if score in {0, 1}:
+                    reason = st.text_area(
+                        "低分依据（必填）",
+                        key=f"{prefix}_reason_{dimension_id}",
+                        max_chars=500,
+                    )
+                    if not reason.strip():
+                        errors.append(f"{dimension['name']}为 {score} 分，需要填写依据")
+                    rationales[dimension_id] = reason.strip()
+
+        with st.expander("一票否决项（没有就不勾选）", expanded=False):
+            veto_options = {
+                item["id"]: item for item in rubric.get("veto_rules") or []
+            }
+            vetoes = st.multiselect(
+                "命中的一票否决项",
+                list(veto_options),
+                format_func=lambda value: veto_options[value]["name"],
+                key=f"{prefix}_vetoes",
+            )
+            for veto_id in vetoes:
+                veto = veto_options[veto_id]
+                st.warning(veto["description"])
+                reason = st.text_area(
+                    f"{veto['name']}的证据（必填）",
+                    help=str(veto.get("required_evidence") or ""),
+                    key=f"{prefix}_veto_reason_{veto_id}",
+                    max_chars=500,
+                )
+                if not reason.strip():
+                    errors.append(f"一票否决项“{veto['name']}”需要填写证据")
+                rationales[f"veto:{veto_id}"] = reason.strip()
+                for dimension_id, forced_score in veto["forces_scores"].items():
+                    if scores.get(dimension_id) != forced_score:
+                        errors.append(
+                            f"{veto['name']}要求“{DIMENSION_NAME_BY_ID.get(dimension_id, dimension_id)}”"
+                            f"必须为 {forced_score} 分"
+                        )
+
+    confidence = st.selectbox(
+        "本次判断的置信度",
+        ["high", "medium", "low"],
+        format_func=lambda value: {"high": "高", "medium": "中", "low": "低"}[value],
+        key=f"{prefix}_confidence",
+    )
+    if confidence == "low":
+        confidence_reason = st.text_area(
+            "低置信度原因（必填）",
+            key=f"{prefix}_confidence_reason",
+            max_chars=500,
+        )
+        if not confidence_reason.strip():
+            errors.append("低置信度需要填写原因")
+        rationales["confidence"] = confidence_reason.strip()
+
+    duration = min(86400.0, max(1.0, time.monotonic() - st.session_state[timer_key]))
+    return (
+        {
+            "valid": valid,
+            "invalid_reason": invalid_reason,
+            "scores": scores,
+            "vetoes": vetoes,
+            "rationales": rationales,
+            "confidence": confidence,
+            "duration_seconds": duration,
+        },
+        errors,
+    )
+
+
+def _render_operator_annotation_form(prefix: str) -> tuple[dict, list[str]]:
+    rubric = RubricEvaluator().public_definition()
+    task = {
+        "assignment_id": prefix,
+        "rubric": rubric,
+    }
+    return _build_human_eval_submission(task)
+
+
+def _render_human_eval_operations(client: AgentApiClient, batch_id: str) -> None:
+    if st.session_state.user_role not in {"operator", "admin"}:
+        return
+    st.divider()
+    st.markdown("### 运营收口")
+    st.caption("此区域只向 operator/admin 开放。先完成独立双评，再处理抽检和分歧。")
+    progress = None
+    try:
+        progress = client.human_eval_progress(batch_id)
+    except AgentApiError as exc:
+        st.error(f"读取运营进度失败：{exc}")
+        return
+    if progress.get("status") == "closed":
+        st.success("这个批次已经关闭。可查看报告、准备导出或生成阶段四报告。")
+
+    columns = st.columns(4)
+    columns[0].metric("已提交", progress.get("submitted_assignments", 0))
+    columns[1].metric("评分总数", progress.get("assignment_count", 0))
+    columns[2].metric("待抽检", (progress.get("qc_status") or {}).get("pending", 0))
+    columns[3].metric("待仲裁", progress.get("pending_adjudication_count", 0))
+
+    qc_queue = client.human_eval_qc_queue(batch_id)
+    if qc_queue:
+        st.markdown("#### 抽检")
+    for item in qc_queue:
+        with st.expander(f"抽检案例 {item['case_id']}"):
+            _render_evaluation_material(item["payload"])
+            st.markdown("**匿名独立评分**")
+            st.json(item["assignments"], expanded=False)
+            assignment_ids = [
+                row["assignment_id"]
+                for row in item["assignments"]
+                if row.get("status") == "submitted"
+            ]
+            decision = st.radio(
+                "抽检结论",
+                ["accepted", "returned"],
+                format_func=lambda value: "通过" if value == "accepted" else "退回修改",
+                horizontal=True,
+                key=f"qc_decision_{item['item_id']}",
+            )
+            returned = []
+            if decision == "returned":
+                returned = st.multiselect(
+                    "退回哪些评分",
+                    assignment_ids,
+                    key=f"qc_returned_{item['item_id']}",
+                )
+            note = st.text_input(
+                "抽检说明",
+                key=f"qc_note_{item['item_id']}",
+            )
+            if st.button("提交抽检结论", key=f"qc_submit_{item['item_id']}"):
+                if not note.strip() or (decision == "returned" and not returned):
+                    st.error("请填写说明；退回时还必须选择至少一份评分。")
+                else:
+                    try:
+                        client.review_human_eval_qc(
+                            batch_id,
+                            item["item_id"],
+                            decision=decision,
+                            note=note,
+                            returned_assignment_ids=returned,
+                        )
+                        st.success("抽检结论已保存。")
+                        st.rerun()
+                    except AgentApiError as exc:
+                        st.error(f"抽检提交失败：{exc}")
+
+    disagreements = client.human_eval_disagreements(batch_id)
+    pending_disagreements = [item for item in disagreements if not item.get("adjudicated")]
+    if pending_disagreements:
+        st.markdown("#### 分歧仲裁")
+    for item in pending_disagreements:
+        with st.expander(f"仲裁案例 {item['case_id']} · {', '.join(item['triggers'])}"):
+            _render_evaluation_material(item["payload"])
+            st.markdown("**Oracle（仅仲裁/运营可见）**")
+            st.json(item.get("oracle_context") or {}, expanded=False)
+            st.markdown("**双方匿名评分**")
+            st.json(item.get("annotations") or [], expanded=False)
+            submission, errors = _render_operator_annotation_form(
+                f"adjudication_{item['item_id']}"
+            )
+            if st.button("提交最终仲裁", key=f"adjudicate_{item['item_id']}"):
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                else:
+                    try:
+                        client.adjudicate_human_eval_item(
+                            batch_id, item["item_id"], submission
+                        )
+                        st.success("仲裁结果已保存。")
+                        st.rerun()
+                    except AgentApiError as exc:
+                        st.error(f"仲裁失败：{exc}")
+
+    report_col, export_col, close_col = st.columns(3)
+    if report_col.button("查看人评质量报告", use_container_width=True):
+        try:
+            st.session_state.human_eval_operator_report = client.human_eval_report(batch_id)
+        except AgentApiError as exc:
+            st.error(f"报告生成失败：{exc}")
+    if export_col.button("准备人工标签导出", use_container_width=True):
+        try:
+            st.session_state.human_eval_operator_export = client.export_human_eval_labels(
+                batch_id
+            )
+        except AgentApiError as exc:
+            st.error(f"导出失败：{exc}")
+    if close_col.button(
+        "关闭批次",
+        type="primary",
+        use_container_width=True,
+        disabled=progress.get("status") == "closed",
+    ):
+        try:
+            client.close_human_eval_batch(batch_id)
+            st.success("批次已关闭，可以生成阶段四报告。")
+            st.rerun()
+        except AgentApiError as exc:
+            st.error(f"暂时不能关闭：{exc}")
+
+    report = st.session_state.get("human_eval_operator_report")
+    if report and (report.get("batch") or {}).get("batch_id") == batch_id:
+        st.json(report, expanded=False)
+    export = st.session_state.get("human_eval_operator_export")
+    if export and export.get("batch_id") == batch_id:
+        payload = json.dumps(export, ensure_ascii=False, indent=2).encode("utf-8")
+        st.download_button(
+            "下载 human-export.json",
+            data=payload,
+            file_name=f"{batch_id}.human-export.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+
+def _render_human_eval(client: AgentApiClient) -> None:
+    _page_heading(
+        "Agent Evaluation",
+        "人工评测",
+        "材料与 Rubric 已自动填好。评审员只需独立选择分数；低分、否决或无效案例再补充依据。",
+    )
+    batch_id = st.text_input(
+        "评测批次编号",
+        key="human_eval_batch_id",
+        placeholder="由批次创建命令返回，例如 4b74…",
+    ).strip()
+    if st.session_state.user_role in {"operator", "admin"}:
+        st.warning(
+            "当前登录的是运营身份。评分时请换成被分配任务的 reviewer 独立凭证；"
+            "运营身份仅用于创建批次、质检、仲裁、关闭和导出。"
+        )
+    if not batch_id:
+        st.info("先创建 baseline 或 candidate 的盲评批次，再把返回的 batch_id 粘贴到这里。")
+        return
+
+    loaded_batch_id = st.session_state.get("human_eval_loaded_batch_id", "")
+    if loaded_batch_id != batch_id:
+        st.session_state.human_eval_loaded_batch_id = batch_id
+        st.session_state.human_eval_task = None
+        st.session_state.human_eval_task_started_at = 0.0
+        st.session_state.pop("human_eval_progress", None)
+
+    if st.session_state.user_role in {"operator", "admin"}:
+        refresh_progress = st.button("刷新批次进度", use_container_width=True)
+    else:
+        refresh_progress = False
+        if st.button("领取 / 继续下一题", use_container_width=True):
+            try:
+                _claim_human_eval_task(client, batch_id)
+                st.rerun()
+            except AgentApiError as exc:
+                st.error(f"领取失败：{exc}")
+    if refresh_progress:
+        try:
+            st.session_state.human_eval_progress = client.human_eval_progress(batch_id)
+        except AgentApiError as exc:
+            st.error(f"查询失败：{exc}")
+
+    progress = st.session_state.get("human_eval_progress")
+    if progress and progress.get("batch_id") == batch_id:
+        columns = st.columns(4)
+        columns[0].metric("案例数", progress.get("item_count", 0))
+        columns[1].metric("已提交评分", progress.get("submitted_assignments", 0))
+        columns[2].metric("评分总数", progress.get("assignment_count", 0))
+        columns[3].metric("待仲裁", progress.get("pending_adjudication_count", 0))
+
+    task = st.session_state.human_eval_task
+    if task is None:
+        st.success("当前账号在这个批次里没有待评任务，或任务已经全部完成。")
+        _render_human_eval_operations(client, batch_id)
+        return
+
+    st.caption(
+        f"盲评任务 {task['blind_key']} · 修订版 {task['revision']}"
+        + (" · 质检退回后重评" if task.get("returned_for_revision") else "")
+    )
+    _render_evaluation_material(task["payload"])
+    submission, errors = _build_human_eval_submission(task)
+    if st.button("提交本题并领取下一题", type="primary", use_container_width=True):
+        if errors:
+            for error in errors:
+                st.error(error)
+            return
+        try:
+            client.submit_human_eval_annotation(task["assignment_id"], submission)
+            _claim_human_eval_task(client, batch_id)
+            st.success("评分已保存。")
+            st.rerun()
+        except AgentApiError as exc:
+            st.error(f"提交失败：{exc}")
+    _render_human_eval_operations(client, batch_id)
 
 
 def _render_observability(client: AgentApiClient) -> None:
@@ -1435,6 +1927,7 @@ def main() -> None:
         "chat": _render_chat,
         "memory": _render_memory,
         "operations": _render_operations,
+        "human_eval": _render_human_eval,
         "observability": _render_observability,
     }
     renderers[page](client)

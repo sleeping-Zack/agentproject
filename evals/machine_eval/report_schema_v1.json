@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-machine-eval-report-v1",
+  "title": "Agent machine evaluation report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "pipeline_version",
+    "rubric_version",
+    "prompt_version",
+    "judge_id",
+    "generated_at",
+    "config_sha256",
+    "rubric_sha256",
+    "run_metadata",
+    "summary",
+    "human_alignment",
+    "slices",
+    "review_queue",
+    "baseline",
+    "production_gate",
+    "cases",
+    "status_note"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "pipeline_version": {"const": "agent-machine-eval-v1"},
+    "rubric_version": {"const": "agent-rubric-v1"},
+    "prompt_version": {"const": "agent-rubric-judge-v1"},
+    "judge_id": {"type": ["string", "null"]},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "config_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "rubric_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "run_metadata": {"type": "object"},
+    "summary": {"type": "object"},
+    "human_alignment": {"type": "object"},
+    "slices": {"type": "object"},
+    "review_queue": {"type": "object"},
+    "baseline": {"type": ["object", "null"]},
+    "production_gate": {
+      "type": "object",
+      "required": ["status", "passed", "failures"],
+      "properties": {
+        "status": {"enum": ["blocked", "insufficient_sample", "evaluated"]},
+        "passed": {"type": ["boolean", "null"]},
+        "failures": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "case_id",
+          "family_id",
+          "model_metadata",
+          "latency_ms",
+          "estimated_cost",
+          "cost_mode",
+          "tokens_in",
+          "tokens_out",
+          "deterministic",
+          "judge",
+          "judge_attempts",
+          "hybrid"
+        ],
+        "properties": {
+          "case_id": {"type": "string", "minLength": 1},
+          "family_id": {"type": "string", "minLength": 1},
+          "model_metadata": {"type": "object"},
+          "latency_ms": {"type": ["number", "null"], "minimum": 0},
+          "estimated_cost": {"type": ["number", "null"], "minimum": 0},
+          "cost_mode": {"type": ["string", "null"]},
+          "tokens_in": {"type": ["integer", "null"], "minimum": 0},
+          "tokens_out": {"type": ["integer", "null"], "minimum": 0},
+          "deterministic": {"type": "object"},
+          "judge": {"type": "object"},
+          "judge_attempts": {"type": "integer", "minimum": 0},
+          "hybrid": {"type": ["object", "null"]}
+        }
+      }
+    },
+    "status_note": {"type": "string"}
+  }
+}

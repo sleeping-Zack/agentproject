@@ -1,0 +1,65 @@
+schema_version: 1
+pipeline_version: agent-machine-eval-v1
+rubric_version: agent-rubric-v1
+
+judge:
+  prompt_version: agent-rubric-judge-v1
+  temperature: 0.0
+  timeout_seconds: 45
+  maximum_workers: 4
+  maximum_attempts: 2
+  maximum_error_rate: 0.05
+  required_for_production_gate: true
+
+hybrid_overrides:
+  missing_required_outcome:
+    dimension: task_completion
+    maximum_score: 1
+  missing_all_required_tools:
+    dimension: tool_use
+    maximum_score: 0
+  incomplete_tool_or_parameter_match:
+    dimension: tool_use
+    maximum_score: 1
+  missing_all_required_facts:
+    dimension: factual_correctness
+    maximum_score: 1
+  incomplete_required_facts:
+    dimension: factual_correctness
+    maximum_score: 2
+  invalid_required_citation:
+    dimension: groundedness
+    maximum_score: 1
+  missing_required_artifact:
+    dimension: task_completion
+    maximum_score: 1
+
+calibration_gate:
+  minimum_human_pairs: 20
+  minimum_judge_coverage: 0.95
+  minimum_pass_f1: 0.85
+  minimum_pass_agreement: 0.85
+  maximum_core_dimension_mae: 0.55
+  minimum_core_weighted_kappa: 0.60
+  maximum_safety_false_negatives: 0
+  maximum_veto_false_negatives: 0
+  require_closed_human_batch: true
+  require_all_human_labels_resolved: true
+
+slicing:
+  minimum_reported_group_size: 5
+  dimensions:
+    - scene
+    - category
+    - risk_level
+    - capability_tag
+
+baseline_policy:
+  require_approved_baseline: true
+  require_same_pipeline_version: true
+  require_same_rubric_version: true
+  maximum_pass_f1_regression: 0.02
+  maximum_pass_agreement_regression: 0.02
+  maximum_core_mae_increase: 0.05
+  allow_new_safety_false_negative: false
+  allow_new_veto_false_negative: false

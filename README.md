@@ -101,6 +101,15 @@ python mcp_server.py
 | `GET /approvals/{approval_id}` | 查询审批记录 |
 | `POST /approvals/{approval_id}/approve` | 审批通过，仅 operator / admin |
 | `POST /approvals/{approval_id}/deny` | 审批拒绝，仅 operator / admin |
+| `POST /human-eval/batches` | 创建双人盲评批次，仅 operator / admin |
+| `GET /human-eval/batches/{batch_id}/tasks/next` | 评审员领取本人下一项盲评任务 |
+| `POST /human-eval/tasks/{assignment_id}/submit` | 按 Rubric 提交本人评分或修订版 |
+| `GET /human-eval/batches/{batch_id}/report` | 一致性、进度与最终人评质量报告，仅 operator / admin |
+| `GET /human-eval/batches/{batch_id}/export` | 导出匿名双评分与仲裁后标签，仅 operator / admin |
+| `POST /machine-eval/runs` | 运行确定性 + 七维 Judge 机评和人工校准，仅 operator / admin |
+| `POST /evaluation-analysis/compare` | 对 baseline/candidate 完整报告做配对实验分析，仅 operator / admin |
+| `GET /evaluation-analysis/reports` | 查询当前租户的不可变实验报告摘要 |
+| `GET /evaluation-analysis/experiments/{experiment_id}/trend` | 查询实验趋势、连续退化与安全告警 |
 | `GET /artifacts/{request_id}` | 按 request_id 查询产物 |
 | `GET /artifact/{artifact_id}` | 查询单个 artifact |
 | `POST /plan` | Planner 多任务接口 |
@@ -745,6 +754,46 @@ flowchart LR
 
 ## 19. 评测与质量门禁架构
 
+统一的人评维度、评分锚点、一票否决、指标口径和标注流程见
+[`docs/evaluation_spec.md`](docs/evaluation_spec.md) 与
+[`docs/annotation_guideline.md`](docs/annotation_guideline.md)；机器可读定义位于
+`config/evaluation_rubric.yml` 和 `config/evaluation_metrics.yml`。
+
+阶段二构建的 175 条分层 Agent 评测规格、split 防泄漏规则与复现命令见
+[`docs/evaluation_dataset_v1.md`](docs/evaluation_dataset_v1.md)。该数据集当前仍是
+`candidate_pending_human_review`，完成独立人工复核前不作为生产 Golden。
+
+阶段三的双人盲评、Rubric 提交校验、自动分歧检测、质检退回、版本化修订、第三方仲裁、
+Kappa/质量报告、匿名标签导出和审计流程见
+[`docs/human_evaluation_workflow.md`](docs/human_evaluation_workflow.md)。实现已通过合成流程测试，
+但不会把合成评分冒充真实人工标注；数据集状态只有在独立评审员实际完成审核后才能升级。
+
+阶段四的确定性评分、七维 Rubric Judge、保守 Hybrid 合成、人机 F1/MAE/Kappa 校准、
+安全漏判检查、分场景误差切片、版本化基线与生产门禁见
+[`docs/machine_evaluation_workflow.md`](docs/machine_evaluation_workflow.md)。未接入关闭且完整的
+阶段三人工批次时，机评报告会明确标记为候选，不能通过生产门禁。
+
+阶段五把两份完整阶段四报告按同一 `case_id` 做配对实验分析，严格分离评测器健康度与
+候选 Agent 质量，输出 bootstrap 置信区间、exact paired test、退化切片、Bad Case 疑似根因、
+迭代建议、待审回归候选以及不可变趋势记录。流程与审批边界见
+[`docs/evaluation_analysis_workflow.md`](docs/evaluation_analysis_workflow.md)：`diagnostic` 仅使用
+dev/regression 做迭代，`promotion` 仅使用冻结 test 且最高只能给出
+`eligible_for_human_approval`，只输出聚合结论，不泄露 test 逐案身份，也不会自动发布或升级基线。
+API promotion 的 baseline 先通过 `/evaluation-analysis/baseline-approvals` 创建待审批记录，再绑定当前租户审批存储中的 `baseline_approval_id`；CLI 审批文件仅用于离线复现。
+
+```mermaid
+flowchart LR
+    B["Baseline 阶段四完整报告"] --> Compare["同 Case 配对分析"]
+    C["Candidate 阶段四完整报告"] --> Compare
+    Compare --> Health["评测器健康门禁"]
+    Compare --> Quality["质量 / 性能 / 安全证据"]
+    Quality --> RCA["退化切片与疑似根因"]
+    RCA --> Backlog["人工审核的迭代与回归候选"]
+    Health --> Decision["blocked / diagnostic_only / keep_baseline / eligible_for_human_approval"]
+    Quality --> Decision
+    Decision --> Human["发布负责人最终审批"]
+```
+
 ```mermaid
 flowchart TB
     RetrievalGolden["30-case retrieval golden"] --> RetrievalEval["冻结真实排名评测"]
@@ -772,6 +821,7 @@ python -m scripts.evaluate_retrieval --fixture evals/fixtures/retrieval_rankings
 $env:AGENT_RERANK_STRATEGY="weighted_rrf"; python -m scripts.evaluate_retrieval --enable-reranker --candidate-k 20 --report reports/retrieval-rerank-online.json
 python -m scripts.evaluate_generation --baseline evals/baselines/generation_baseline_v1.json --gate
 python -m scripts.evaluate_agent --golden evals/agent_offline_golden.jsonl --mode harness --offline --baseline evals/baselines/agent_baseline_v1.json --gate --min-case-count 60
+python -m scripts.analyze_evaluation_experiment --baseline reports/baseline.json --candidate reports/candidate.json --experiment-id exp-routing-v2 --mode promotion --hypothesis "routing-v2 is non-inferior" --change "router-v1 -> router-v2" --baseline-approval reports/baseline-approval.json --output reports/exp-routing-v2.json --markdown reports/exp-routing-v2.md --gate
 python -m scripts.benchmark_api --url http://127.0.0.1:8000/chat --api-key dev-api-key
 ```
 

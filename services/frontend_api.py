@@ -174,6 +174,72 @@ class AgentApiClient:
         suffix = "/otel" if otel else ""
         return self._json("GET", f"/traces/{request_id}{suffix}")
 
+    def human_eval_progress(self, batch_id: str) -> Dict[str, Any]:
+        return self._json("GET", f"/human-eval/batches/{batch_id}")
+
+    def next_human_eval_task(self, batch_id: str):
+        response = self._json(
+            "GET", f"/human-eval/batches/{batch_id}/tasks/next"
+        )
+        return response["task"]
+
+    def submit_human_eval_annotation(
+        self, assignment_id: str, submission: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return self._json(
+            "POST",
+            f"/human-eval/tasks/{assignment_id}/submit",
+            json=submission,
+        )
+
+    def human_eval_disagreements(self, batch_id: str):
+        return self._json(
+            "GET", f"/human-eval/batches/{batch_id}/disagreements"
+        )
+
+    def adjudicate_human_eval_item(
+        self,
+        batch_id: str,
+        item_id: str,
+        submission: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._json(
+            "POST",
+            f"/human-eval/batches/{batch_id}/items/{item_id}/adjudicate",
+            json=submission,
+        )
+
+    def human_eval_qc_queue(self, batch_id: str):
+        return self._json("GET", f"/human-eval/batches/{batch_id}/qc")
+
+    def review_human_eval_qc(
+        self,
+        batch_id: str,
+        item_id: str,
+        *,
+        decision: str,
+        note: str,
+        returned_assignment_ids: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        return self._json(
+            "POST",
+            f"/human-eval/batches/{batch_id}/items/{item_id}/qc",
+            json={
+                "decision": decision,
+                "note": note,
+                "returned_assignment_ids": returned_assignment_ids or [],
+            },
+        )
+
+    def human_eval_report(self, batch_id: str) -> Dict[str, Any]:
+        return self._json("GET", f"/human-eval/batches/{batch_id}/report")
+
+    def export_human_eval_labels(self, batch_id: str) -> Dict[str, Any]:
+        return self._json("GET", f"/human-eval/batches/{batch_id}/export")
+
+    def close_human_eval_batch(self, batch_id: str) -> Dict[str, Any]:
+        return self._json("POST", f"/human-eval/batches/{batch_id}/close")
+
     def chat_events(
         self,
         message: str,

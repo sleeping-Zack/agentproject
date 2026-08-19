@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-quality-case-v1",
+  "title": "Agent quality evaluation case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "dataset_version",
+    "rubric_version",
+    "case_id",
+    "family_id",
+    "split",
+    "category",
+    "scene",
+    "evaluation_layer",
+    "language",
+    "query",
+    "turns",
+    "context",
+    "labels",
+    "expected",
+    "references",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "dataset_version": {"const": "agent-quality-v1"},
+    "rubric_version": {"const": "agent-rubric-v1"},
+    "case_id": {"type": "string", "pattern": "^aq-v1-[a-z]+-[0-9]{3}$"},
+    "family_id": {"type": "string", "minLength": 1},
+    "split": {"enum": ["dev", "test", "regression"]},
+    "category": {
+      "enum": [
+        "knowledge_fault",
+        "tool_use",
+        "multi_step",
+        "safety",
+        "failure_recovery",
+        "adversarial_boundary"
+      ]
+    },
+    "scene": {
+      "enum": [
+        "knowledge_qa",
+        "fault_diagnosis",
+        "tool_execution",
+        "multi_step_task",
+        "clarification_refusal",
+        "security_boundary",
+        "failure_recovery"
+      ]
+    },
+    "evaluation_layer": {"const": "agent_end_to_end"},
+    "language": {"enum": ["zh-CN"]},
+    "query": {"type": "string", "minLength": 2},
+    "turns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "content"],
+        "properties": {
+          "role": {"enum": ["user", "assistant"]},
+          "content": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "context": {"type": "object"},
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability_tags", "difficulty", "risk_level"],
+      "properties": {
+        "capability_tags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "difficulty": {"enum": ["D1", "D2", "D3"]},
+        "risk_level": {"enum": ["L0", "L1", "L2", "L3"]}
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "behavior",
+        "outcome",
+        "tools",
+        "facts",
+        "forbidden_facts",
+        "requires_citation",
+        "requires_artifact"
+      ],
+      "properties": {
+        "behavior": {"type": "string", "minLength": 10},
+        "outcome": {
+          "enum": [
+            "completed",
+            "clarify",
+            "refuse",
+            "pending_approval",
+            "blocked",
+            "graceful_failure",
+            "partial_completion",
+            "completed_with_degradation"
+          ]
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "arguments", "argument_match"],
+            "properties": {
+              "name": {"type": "string"},
+              "arguments": {"type": "object"},
+              "argument_match": {"enum": ["exact", "contains"]}
+            }
+          }
+        },
+        "facts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "forbidden_facts": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "requires_citation": {"type": "boolean"},
+        "requires_artifact": {"type": "boolean"}
+      }
+    },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "uri"],
+        "properties": {
+          "type": {"const": "local_file"},
+          "uri": {"type": "string", "minLength": 1},
+          "locator": {"type": "string"}
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["creation_method", "review_status", "authored_at"],
+      "properties": {
+        "creation_method": {
+          "enum": ["scenario_design", "legacy_migration_and_enrichment"]
+        },
+        "review_status": {"const": "pending_second_reviewer"},
+        "authored_at": {"type": "string", "format": "date"},
+        "source_case": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

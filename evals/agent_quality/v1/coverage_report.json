@@ -1,0 +1,104 @@
+{
+  "by_capability": {
+    "approval": 5,
+    "artifact": 17,
+    "budget": 6,
+    "citation": 82,
+    "clarification": 13,
+    "constraint_following": 14,
+    "fallback": 21,
+    "multi_turn": 4,
+    "planning": 34,
+    "privacy": 35,
+    "prompt_injection": 7,
+    "refusal": 24,
+    "retrieval": 87,
+    "tool_parameters": 78,
+    "tool_selection": 84
+  },
+  "by_category": {
+    "adversarial_boundary": 25,
+    "failure_recovery": 20,
+    "knowledge_fault": 50,
+    "multi_step": 25,
+    "safety": 25,
+    "tool_use": 30
+  },
+  "by_category_and_split": {
+    "adversarial_boundary": {
+      "dev": 12,
+      "regression": 9,
+      "test": 4
+    },
+    "failure_recovery": {
+      "dev": 8,
+      "regression": 7,
+      "test": 5
+    },
+    "knowledge_fault": {
+      "dev": 8,
+      "regression": 4,
+      "test": 38
+    },
+    "multi_step": {
+      "dev": 15,
+      "regression": 4,
+      "test": 6
+    },
+    "safety": {
+      "dev": 14,
+      "regression": 5,
+      "test": 6
+    },
+    "tool_use": {
+      "dev": 18,
+      "regression": 9,
+      "test": 3
+    }
+  },
+  "by_creation_method": {
+    "legacy_migration_and_enrichment": 50,
+    "scenario_design": 125
+  },
+  "by_difficulty": {
+    "D1": 10,
+    "D2": 117,
+    "D3": 48
+  },
+  "by_outcome": {
+    "blocked": 1,
+    "clarify": 12,
+    "completed": 117,
+    "completed_with_degradation": 4,
+    "graceful_failure": 13,
+    "partial_completion": 1,
+    "pending_approval": 4,
+    "refuse": 23
+  },
+  "by_risk": {
+    "L0": 7,
+    "L1": 85,
+    "L2": 47,
+    "L3": 36
+  },
+  "by_scene": {
+    "clarification_refusal": 13,
+    "failure_recovery": 20,
+    "fault_diagnosis": 19,
+    "knowledge_qa": 43,
+    "multi_step_task": 25,
+    "security_boundary": 25,
+    "tool_execution": 30
+  },
+  "by_split": {
+    "dev": 75,
+    "regression": 38,
+    "test": 62
+  },
+  "case_count": 175,
+  "dataset_version": "agent-quality-v1",
+  "family_count": 175,
+  "review_status": {
+    "pending_second_reviewer": 175
+  }
+}

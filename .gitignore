@@ -29,6 +29,7 @@ rag/chroma_db/
 storage/chroma/
 storage/md5.text
 storage/*.db
+data/*.db
 storage/*.pkl
 storage/*_report.json
 md5.text

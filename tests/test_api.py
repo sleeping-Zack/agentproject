@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 import api.server as server
@@ -25,6 +27,52 @@ def test_tool_manifest_endpoint_exports_allowed_tools():
     assert any(tool["name"] == "rag_summarize" for tool in manifest["tools"])
 
 
+def test_harness_run_returns_citation_evidence_contract(monkeypatch):
+    evidence = [
+        {
+            "id": "doc:4",
+            "source": "故障排除.txt",
+            "excerpt": "清理风道杂物。",
+            "chunk_index": 4,
+        }
+    ]
+
+    class Runner:
+        def run(self, task):
+            return SimpleNamespace(
+                request_id=task.request_id,
+                state=SimpleNamespace(status="completed", error=None, budget=None),
+                answer="清理风道杂物 [doc:4]。",
+                approval_id=None,
+                artifacts=[],
+                verifier=None,
+                evidence=evidence,
+            )
+
+    monkeypatch.setattr(server, "harness_runner", Runner())
+    monkeypatch.setattr(server.trace_recorder, "export_trace", lambda _request_id: {})
+    monkeypatch.setattr(server.store, "save_trace", lambda *_args, **_kwargs: None)
+    client = TestClient(app)
+
+    response = client.post(
+        "/harness/run",
+        headers={"X-API-Key": "dev-api-key", "X-Tenant-ID": "api-test"},
+        json={"message": "清洁效果下降", "session_id": "citation-contract"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["evidence"] == evidence
+
+    chat_response = client.post(
+        "/chat",
+        headers={"X-API-Key": "dev-api-key", "X-Tenant-ID": "api-test"},
+        json={"message": "清洁效果下降", "session_id": "citation-contract"},
+    )
+
+    assert chat_response.status_code == 200
+    assert chat_response.json()["evidence"] == evidence
+
+
 def test_harness_run_creates_pending_approval_for_sensitive_report():
     client = TestClient(app)
 
@@ -43,6 +91,8 @@ def test_harness_run_creates_pending_approval_for_sensitive_report():
     payload = response.json()
     assert payload["status"] == "pending_approval"
     assert payload["approval_id"]
+    assert payload["error"] is None
+    assert payload["budget"]["remaining_tokens"] <= payload["budget"]["max_tokens"]
 
     approval = client.get(
         f"/approvals/{payload['approval_id']}",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 import time
 from uuid import uuid4
 
@@ -93,9 +94,19 @@ ROUTING_REASON_LABELS = {
     "verification_retry_escalation": "上轮结果未通过校验，升级为规划执行",
     "planner_verification_retry_downgrade": "规划结果未通过校验，降级为常规 Agent 重试",
     "semantic_report_capability_required": "语义目标需要读取报告数据",
+    "generated_answer_verification_failed": "生成回答未通过证据校验",
+    "knowledge_no_results": "知识库中没有检索到与问题相关的内容",
+    "knowledge_irrelevant": "检索到的知识库内容与问题不相关",
+    "evidence_insufficient_for_conclusion": "知识库现有证据不足以支持明确结论",
+    "required_rag_execution_guarantee": "知识型问题需先完成知识库检索",
     "verification_retry_budget_insufficient": "剩余预算不足以执行安全重试",
     "retry_token_budget_insufficient": "剩余 Token 不足以执行安全重试",
     "retry_tool_budget_insufficient": "剩余工具额度不足以执行安全重试",
+    "max_tokens_exceeded": "本次运行的 Token 预算已耗尽",
+    "max_cost_exceeded": "本次运行的费用预算已耗尽",
+    "max_tool_calls_exceeded": "本次运行的工具调用额度已耗尽",
+    "max_steps_exceeded": "本次运行的执行步骤额度已耗尽",
+    "deadline_exceeded": "本次运行已达到时间上限",
 }
 
 TOOL_LABELS = {
@@ -113,6 +124,13 @@ QUICK_PROMPTS = (
     ("制定耗材维护计划", "请告诉我滤网、边刷和主刷的日常维护建议。"),
     ("结合家庭环境给选购建议", "请根据我的家庭环境，帮我分析适合哪类扫地机器人。"),
     ("查看设备使用注意事项", "请总结扫地机器人日常使用中最重要的安全和维护注意事项。"),
+)
+
+_CITATION_TOKEN_RE = re.compile(
+    r"\[\s*([A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127})\s*\](?!\()"
+)
+_INCOMPLETE_CITATION_RE = re.compile(
+    r"\[[A-Za-z0-9][A-Za-z0-9_.:/#-]{7,127}$"
 )
 
 
@@ -366,6 +384,71 @@ def _inject_theme() -> None:
             color: var(--text-primary);
             line-height: 1.75;
         }
+        .citation-ref {
+            position: relative;
+            display: inline-block;
+            margin: 0 .08rem;
+            vertical-align: super;
+            line-height: 1;
+            cursor: help;
+            outline: none;
+        }
+        .citation-ref > sup {
+            display: inline-grid;
+            min-width: 1.05rem;
+            height: 1.05rem;
+            padding: 0 .22rem;
+            place-items: center;
+            border-radius: 999px;
+            color: #50545b !important;
+            background: #eceff1;
+            font-size: .66rem;
+            font-weight: 650;
+            line-height: 1;
+        }
+        .citation-tooltip {
+            position: absolute;
+            z-index: 1000;
+            left: 50%;
+            bottom: calc(100% + .55rem);
+            width: min(320px, 76vw);
+            padding: .7rem .78rem;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            color: var(--text-primary) !important;
+            background: #fff;
+            box-shadow: 0 8px 28px rgba(0,0,0,.14);
+            font-size: .76rem;
+            font-weight: 400;
+            line-height: 1.45;
+            text-align: left;
+            white-space: normal;
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
+            transform: translate(-50%, .2rem);
+            transition: opacity .12s ease, transform .12s ease;
+        }
+        .citation-tooltip strong,
+        .citation-tooltip span {
+            display: block;
+            color: var(--text-primary) !important;
+        }
+        .citation-tooltip .citation-location {
+            margin-top: .14rem;
+            color: var(--text-secondary) !important;
+            font-size: .7rem;
+        }
+        .citation-tooltip .citation-excerpt {
+            margin-top: .42rem;
+            color: var(--text-secondary) !important;
+        }
+        .citation-ref:hover .citation-tooltip,
+        .citation-ref:focus-visible .citation-tooltip {
+            visibility: visible;
+            opacity: 1;
+            transform: translate(-50%, 0);
+        }
         [data-testid="stChatInput"] {
             max-width: 850px;
             margin: 0 auto 1rem;
@@ -508,6 +591,136 @@ def _merge_answer(answer: str, payload: dict) -> str:
     return delta if payload.get("replace") else answer + delta
 
 
+def _answer_evidence_from_terminal(payload: dict) -> list[dict]:
+    """Read the public citation payload, with an old-server artifact fallback."""
+    direct = payload.get("evidence")
+    if isinstance(direct, list):
+        return [item for item in direct if isinstance(item, dict)]
+    for artifact in reversed(payload.get("artifacts") or []):
+        if not isinstance(artifact, dict):
+            continue
+        artifact_payload = artifact.get("payload")
+        if not isinstance(artifact_payload, dict):
+            continue
+        evidence = artifact_payload.get("evidence")
+        if (
+            (artifact.get("artifact_type") == "answer" or artifact.get("name") == "final-answer")
+            and isinstance(evidence, list)
+        ):
+            return [item for item in evidence if isinstance(item, dict)]
+    return []
+
+
+def _citation_source_name(item: dict) -> str:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    source = (
+        item.get("title")
+        or item.get("source")
+        or metadata.get("source_name")
+        or metadata.get("document_title")
+        or metadata.get("source")
+        or ""
+    )
+    return re.split(r"[/\\]", str(source))[-1].strip()
+
+
+def _citation_location(item: dict, evidence_id: str) -> str:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    page = item.get("page", metadata.get("page"))
+    section = item.get("section", metadata.get("section_title"))
+    chunk = item.get(
+        "chunk_index",
+        metadata.get("chunk_index", metadata.get("chunk_id")),
+    )
+    if chunk is None:
+        suffix = re.search(r"(?::|#)([^:#]+)$", evidence_id)
+        if suffix and not str(suffix.group(1)).startswith("sha256"):
+            chunk = suffix.group(1)
+    parts = []
+    if page is not None and page != "":
+        parts.append(f"第 {page} 页")
+    if section is not None and section != "":
+        parts.append(str(section))
+    if chunk is not None and chunk != "":
+        parts.append(f"片段 {chunk}")
+    return " · ".join(parts)
+
+
+def _citation_excerpt(item: dict) -> str:
+    text = str(item.get("excerpt") or item.get("content") or "")
+    text = " ".join(text.split())
+    return text if len(text) <= 140 else f"{text[:137]}..."
+
+
+def _looks_like_citation_id(reference: str) -> bool:
+    # Only the legacy knowledge-base ID shape is inferred without metadata.
+    # Broad guesses (for example any ``[2026]``) corrupt ordinary Markdown.
+    return bool(re.fullmatch(r"[a-fA-F0-9]{32}:\d+", reference))
+
+
+def _format_answer_with_citations(answer: str, evidence: list[dict] | None = None) -> str:
+    """Escape an answer and replace evidence IDs with safe, numbered tooltips."""
+    answer = str(answer or "")
+    # Do not flash a half-streamed internal evidence ID before its closing bracket.
+    answer = _INCOMPLETE_CITATION_RE.sub("", answer)
+    evidence_items = [item for item in (evidence or []) if isinstance(item, dict)]
+    evidence_by_id = {
+        str(item.get("id") or item.get("evidence_id")): item
+        for item in evidence_items
+        if item.get("id") or item.get("evidence_id")
+    }
+    numbers: dict[str, int] = {}
+    output = []
+    cursor = 0
+
+    for match in _CITATION_TOKEN_RE.finditer(answer):
+        reference = match.group(1)
+        item = evidence_by_id.get(reference)
+        citation_key = reference
+        if item is None and reference.isdigit():
+            index = int(reference) - 1
+            if 0 <= index < len(evidence_items):
+                item = evidence_items[index]
+                citation_key = str(item.get("id") or item.get("evidence_id") or reference)
+        if item is None and not _looks_like_citation_id(reference):
+            continue
+
+        output.append(html.escape(answer[cursor : match.start()], quote=True))
+        number = numbers.setdefault(citation_key, len(numbers) + 1)
+        source = _citation_source_name(item or {})
+        location = _citation_location(item or {}, citation_key)
+        excerpt = _citation_excerpt(item or {})
+        if source:
+            label = f"来源 {number}：{source}"
+            if location:
+                label += f"，{location}"
+            tooltip = f"<strong>{html.escape(source, quote=True)}</strong>"
+            if location:
+                tooltip += (
+                    '<span class="citation-location">'
+                    f"{html.escape(location, quote=True)}</span>"
+                )
+            if excerpt:
+                tooltip += (
+                    '<span class="citation-excerpt">'
+                    f"{html.escape(excerpt, quote=True)}</span>"
+                )
+        else:
+            label = f"来源 {number}：来源详情暂不可用"
+            tooltip = "<strong>来源详情暂不可用</strong>"
+        output.append(
+            '<span class="citation-ref" tabindex="0" '
+            f'aria-label="{html.escape(label, quote=True)}">'
+            f'<sup aria-hidden="true">{number}</sup>'
+            f'<span class="citation-tooltip" role="tooltip">{tooltip}</span>'
+            "</span>"
+        )
+        cursor = match.end()
+
+    output.append(html.escape(answer[cursor:], quote=True))
+    return "".join(output)
+
+
 def _event_label(event_type: str, payload: dict) -> str:
     tool_name = payload.get("tool") or payload.get("tool_name") or "服务工具"
     tool_label = TOOL_LABELS.get(str(tool_name), str(tool_name))
@@ -539,9 +752,46 @@ def _event_label(event_type: str, payload: dict) -> str:
             return "复杂任务已完成可执行部分，部分步骤未完成"
         return "复杂任务已完成规划与执行"
     if event_type == "execution_degraded":
-        if payload.get("strategy") == "verified_partial_result":
-            return "预算不足，已返回通过校验的部分结果"
-        return "预算不足，已停止输出未经校验的结果"
+        strategy = str(payload.get("strategy") or "")
+        reason = str(payload.get("reason") or "")
+        if strategy == "knowledge_gap":
+            knowledge_gap_labels = {
+                "knowledge_no_results": (
+                    "知识库中没有找到相关内容，暂时无法依据现有资料回答"
+                ),
+                "knowledge_irrelevant": (
+                    "知识库检索到的内容与问题不相关，暂时无法依据现有资料回答"
+                ),
+                "evidence_insufficient_for_conclusion": (
+                    "知识库现有资料不足以支持明确结论，暂时无法可靠回答"
+                ),
+            }
+            return knowledge_gap_labels.get(
+                reason,
+                "知识库现有资料不足，暂时无法可靠回答",
+            )
+        budget_limited = reason.endswith("budget_insufficient") or reason in {
+            "max_tokens_exceeded",
+            "max_cost_exceeded",
+            "max_tool_calls_exceeded",
+            "max_steps_exceeded",
+            "deadline_exceeded",
+        }
+        if strategy == "verified_evidence_excerpt":
+            return "生成回答未通过校验，已返回通过校验的证据摘录"
+        if strategy == "verified_rag_answer":
+            return "最终整合遗漏了引用，已恢复通过校验的知识库回答"
+        if strategy == "verified_partial_result":
+            if budget_limited:
+                return "预算不足，已返回通过校验的部分结果"
+            return "已返回通过校验的部分结果"
+        if strategy == "stop_unverified_retry":
+            if budget_limited:
+                return "预算不足，已停止输出未经校验的结果"
+            return "结果未通过校验，已停止输出未经校验的结果"
+        if budget_limited:
+            return "预算不足，执行已安全降级"
+        return "执行已安全降级"
     labels = {
         "run_started": "已接收问题，正在理解服务需求",
         "model_started": "正在分析问题并制定处理路径",
@@ -567,8 +817,27 @@ def _event_detail(event_type: str, payload: dict) -> dict:
     """Build a bounded audit view without exposing hidden chain-of-thought."""
     tool_name = str(payload.get("tool") or "")
     tool_label = TOOL_LABELS.get(tool_name, tool_name)
+    budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
+    token_usage = (
+        f"{budget.get('used_tokens', 0)} / {budget.get('max_tokens')}"
+        if budget
+        else None
+    )
+    tool_usage = (
+        f"{budget.get('used_tool_calls', 0)} / {budget.get('max_tool_calls')}"
+        if budget
+        else None
+    )
     if event_type == "execution_degraded":
         reason = str(payload.get("reason") or "")
+        if payload.get("strategy") == "knowledge_gap":
+            return {
+                "结果类型": "知识库资料不足",
+                "说明": ROUTING_REASON_LABELS.get(
+                    reason,
+                    "知识库现有资料不足以支持回答",
+                ),
+            }
         return {
             "执行状态": payload.get("status"),
             "降级原因": ROUTING_REASON_LABELS.get(reason, reason),
@@ -718,10 +987,19 @@ def _event_detail(event_type: str, payload: dict) -> dict:
             "最终状态": payload.get("status"),
             "产物数量": len(payload.get("artifacts") or []),
             "是否经过质量校验": bool(payload.get("verifier")),
+            "证据定位编号": [
+                item.get("id") or item.get("evidence_id")
+                for item in (payload.get("evidence") or [])
+                if isinstance(item, dict) and (item.get("id") or item.get("evidence_id"))
+            ],
+            "Token 用量": token_usage,
+            "工具调用用量": tool_usage,
         },
         "run_failed": {
             "最终状态": payload.get("status"),
             "失败原因": payload.get("error") or "执行未完成",
+            "Token 用量": token_usage,
+            "工具调用用量": tool_usage,
         },
     }
     return {key: value for key, value in mappings.get(event_type, {}).items() if value is not None}
@@ -938,7 +1216,15 @@ def _render_chat(client: AgentApiClient) -> None:
 
     for message in st.session_state.chat_messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            if message["role"] == "assistant":
+                st.markdown(
+                    _format_answer_with_citations(
+                        message["content"], message.get("evidence")
+                    ),
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(message["content"])
             if message.get("events"):
                 _render_audit_trail(
                     message["events"], message.get("request_id", "")
@@ -974,6 +1260,7 @@ def _process_chat_request(
     request_id = str(uuid4())
     st.session_state.last_request_id = request_id
     answer = ""
+    answer_evidence = []
     terminal_payload = {}
     event_log = []
 
@@ -995,7 +1282,10 @@ def _process_chat_request(
                 label = _event_label(event_type, payload)
                 if event_type == "token_delta":
                     answer = _merge_answer(answer, payload)
-                    answer_placeholder.markdown(answer + "▌")
+                    answer_placeholder.markdown(
+                        _format_answer_with_citations(answer, answer_evidence) + "▌",
+                        unsafe_allow_html=True,
+                    )
                 elif event_type in {
                     "run_started",
                     "model_started",
@@ -1023,6 +1313,7 @@ def _process_chat_request(
                 elif event_type in {"run_completed", "run_failed"}:
                     terminal_payload = payload
                     answer = str(payload.get("answer") or answer or payload.get("error") or "")
+                    answer_evidence = _answer_evidence_from_terminal(payload)
                     completed = event_type == "run_completed" and payload.get("status") == "completed"
                     status.update(
                         label="服务已完成" if completed else "服务处理未完成",
@@ -1033,7 +1324,13 @@ def _process_chat_request(
             answer = f"服务暂时不可用：{exc}"
             status.update(label="服务连接异常", state="error", expanded=False)
 
-        answer_placeholder.markdown(answer or "本次服务没有返回有效答案。")
+        answer_placeholder.markdown(
+            _format_answer_with_citations(
+                answer or "本次服务没有返回有效答案。",
+                answer_evidence,
+            ),
+            unsafe_allow_html=True,
+        )
         _render_audit_trail(event_log, request_id)
 
     approval_id = terminal_payload.get("approval_id")
@@ -1051,6 +1348,7 @@ def _process_chat_request(
         {
             "role": "assistant",
             "content": answer or "本次服务没有返回有效答案。",
+            "evidence": answer_evidence,
             "request_id": request_id,
             "events": event_log,
         }

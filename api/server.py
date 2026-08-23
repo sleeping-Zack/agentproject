@@ -5,7 +5,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -203,6 +203,9 @@ class ChatResponse(BaseModel):
     trace_url: str
     status: str = "completed"
     approval_id: Optional[str] = None
+    evidence: List[Dict] = Field(default_factory=list)
+    error: Optional[str] = None
+    budget: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PlanRequest(BaseModel):
@@ -235,7 +238,10 @@ class HarnessRunResponse(BaseModel):
     approval_id: Optional[str] = None
     artifacts: List[Dict]
     verifier: Optional[Dict] = None
+    evidence: List[Dict] = Field(default_factory=list)
     trace_url: str
+    error: Optional[str] = None
+    budget: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -793,6 +799,13 @@ async def chat(
         trace_url=f"/traces/{result.request_id}",
         status=result.state.status,
         approval_id=result.approval_id,
+        evidence=getattr(result, "evidence", []),
+        error=getattr(result.state, "error", None),
+        budget=(
+            result.state.budget.manager.snapshot()
+            if getattr(result.state, "budget", None) is not None
+            else {}
+        ),
     )
 
 
@@ -857,6 +870,7 @@ async def _legacy_runner_stream(task: AgentTask, last_event_id: int):
             "status": result.state.status,
             "answer": result.answer,
             "approval_id": result.approval_id,
+            "evidence": getattr(result, "evidence", []),
         },
     )
 
@@ -1022,7 +1036,14 @@ async def harness_run(
         approval_id=result.approval_id,
         artifacts=[artifact.__dict__ for artifact in result.artifacts],
         verifier=result.verifier.__dict__ if result.verifier else None,
+        evidence=getattr(result, "evidence", []),
         trace_url=f"/traces/{result.request_id}",
+        error=getattr(result.state, "error", None),
+        budget=(
+            result.state.budget.manager.snapshot()
+            if getattr(result.state, "budget", None) is not None
+            else {}
+        ),
     )
 
 

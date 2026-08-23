@@ -11,7 +11,10 @@ in tests and easy to swap to different providers.
 """
 from __future__ import annotations
 
+import os
 from typing import Callable, Dict, List, Optional
+
+from agent.budgeted_text_model import invoke_budgeted_text_model
 
 SUMMARY_PROMPT_TEMPLATE = """你是一个长对话归纳助手。请把以下历史对话压缩成不超过200字的中文摘要，
 保留：用户身份、关心的设备/型号、未解决的问题、已经回答过的关键事实。
@@ -46,7 +49,13 @@ class ConversationSummarizer:
     def _default_invoker(self, prompt: str) -> str:
         from model.factory import chat_model
 
-        response = chat_model.invoke(prompt)
+        response = invoke_budgeted_text_model(
+            chat_model.resolve(),
+            prompt,
+            max_output_tokens=int(os.getenv("AGENT_SUMMARY_MAX_TOKENS", "500")),
+            operation="conversation-summary",
+            temperature=0,
+        )
         content = getattr(response, "content", response)
         return str(content).strip()
 

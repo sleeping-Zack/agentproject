@@ -1,5 +1,7 @@
 from typing import Any, Dict
 
+from agent.budget import BudgetManager
+
 
 class ReportWorkflow:
     """Explicit report-generation workflow.
@@ -20,6 +22,7 @@ class ReportWorkflow:
         month: str | None = None,
         tenant_id: str | None = None,
         intent: str | None = None,
+        budget_manager: BudgetManager | None = None,
     ) -> Dict[str, Any]:
         state: Dict[str, Any] = {
             "query": query,
@@ -37,7 +40,7 @@ class ReportWorkflow:
         if not state.get("record"):
             self._fallback(state, "没有找到对应月份的使用记录，暂时无法生成报告。")
             return state
-        self._rag_supplement(state)
+        self._rag_supplement(state, budget_manager=budget_manager)
         self._generate_report(state)
         return state
 
@@ -55,13 +58,18 @@ class ReportWorkflow:
     def _fetch_record(self, state: Dict[str, Any]) -> None:
         state["record"] = self.tool_service.fetch_external_data(state["user_id"], state["month"])
 
-    def _rag_supplement(self, state: Dict[str, Any]) -> None:
+    def _rag_supplement(
+        self,
+        state: Dict[str, Any],
+        *,
+        budget_manager: BudgetManager | None = None,
+    ) -> None:
         result_method = getattr(self.rag_service, "rag_summarize_result", None)
         if callable(result_method):
-            result = result_method(
-                "扫地机器人使用报告保养建议",
-                tenant_id=state.get("tenant_id"),
-            )
+            kwargs = {"tenant_id": state.get("tenant_id")}
+            if budget_manager is not None:
+                kwargs["budget_manager"] = budget_manager
+            result = result_method("扫地机器人使用报告保养建议", **kwargs)
             verification = result.verification or {}
             if verification.get("passed", True) is False:
                 state["rag_advice"] = "暂无经过证据一致性校验的补充建议。"
@@ -71,7 +79,15 @@ class ReportWorkflow:
                 state["rag_advice_status"] = "available"
             state["evidence"] = list(result.evidence)
             return
-        state["rag_advice"] = self.rag_service.rag_summarize("扫地机器人使用报告保养建议")
+        if budget_manager is None:
+            state["rag_advice"] = self.rag_service.rag_summarize(
+                "扫地机器人使用报告保养建议"
+            )
+        else:
+            state["rag_advice"] = self.rag_service.rag_summarize(
+                "扫地机器人使用报告保养建议",
+                budget_manager=budget_manager,
+            )
         state["evidence"] = []
 
     def _generate_report(self, state: Dict[str, Any]) -> None:

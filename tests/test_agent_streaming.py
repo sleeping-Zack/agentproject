@@ -59,6 +59,75 @@ def test_runner_streams_tokens_before_terminal_event(tmp_path):
         event_bus.discard(task.request_id)
 
 
+def test_runner_terminal_event_exposes_only_cited_safe_evidence(tmp_path):
+    class Backend:
+        def __call__(self, _task, _state):
+            return AgentBackendResult(
+                answer="先检查边刷 [doc:2]，再清理风道 [doc:4]。",
+                evidence=[
+                    {
+                        "id": "doc:4",
+                        "source": r"C:\\private\\knowledge\\故障排除.txt",
+                        "content": "风道有异响时，清理其中的杂物。",
+                        "score": 0.99,
+                        "metadata": {
+                            "source_path": r"C:\\private\\knowledge\\故障排除.txt",
+                            "content_hash": "internal-hash",
+                            "document_title": "故障排除",
+                            "section_title": "清洁系统",
+                            "chunk_index": 4,
+                            "page": 2,
+                            "page_label": "3",
+                        },
+                    },
+                    {
+                        "id": "doc:2",
+                        "source": "扫地机器人100问.pdf",
+                        "content": "  边刷将墙边灰尘扫向主吸口。\n",
+                        "metadata": {"chunk_index": 2},
+                    },
+                    {
+                        "id": "uncited:1",
+                        "source": "内部资料.txt",
+                        "content": "未引用内容不应发送给客户端。",
+                        "metadata": {"source_path": r"C:\\private\\内部资料.txt"},
+                    },
+                ],
+            )
+
+    runner = _runner(tmp_path, Backend())
+    task = AgentTask(query="清洁效果下降", request_id=str(uuid4()))
+
+    async def collect():
+        return [event async for event in runner.run_stream(task)]
+
+    try:
+        terminal = asyncio.run(collect())[-1]
+        assert terminal.event_type == "run_completed"
+        assert terminal.payload["evidence"] == [
+            {
+                "id": "doc:2",
+                "source": "扫地机器人100问.pdf",
+                "excerpt": "边刷将墙边灰尘扫向主吸口。",
+                "chunk_index": 2,
+            },
+            {
+                "id": "doc:4",
+                "source": "故障排除.txt",
+                "excerpt": "风道有异响时，清理其中的杂物。",
+                "title": "故障排除",
+                "section": "清洁系统",
+                "page": "3",
+                "chunk_index": 4,
+            },
+        ]
+        assert "source_path" not in repr(terminal.payload["evidence"])
+        assert "content_hash" not in repr(terminal.payload["evidence"])
+        assert "uncited:1" not in repr(terminal.payload["evidence"])
+    finally:
+        event_bus.discard(task.request_id)
+
+
 def test_runner_publishes_verified_answer_for_deferred_backend(tmp_path):
     class Backend:
         defers_answer_tokens = True
@@ -203,6 +272,29 @@ def test_react_agent_publishes_only_final_model_answer():
         assert events[0].payload["replace"] is True
     finally:
         event_bus.discard(request_id)
+
+
+def test_react_agent_stream_uses_configured_recursion_limit(monkeypatch):
+    monkeypatch.setenv("AGENT_MAX_REACT_RECURSION", "9")
+    react_agent = ReactAgent.__new__(ReactAgent)
+    react_agent.memory = SimpleNamespace(get_messages=lambda *_args, **_kwargs: [])
+
+    class StreamStub:
+        def __init__(self):
+            self.config = None
+
+        def stream(self, *_args, **kwargs):
+            self.config = kwargs.get("config")
+            yield {
+                "type": "updates",
+                "data": {"model": {"messages": [AIMessage(content="完成")] }},
+            }
+
+    stream = StreamStub()
+    react_agent.agent = stream
+
+    assert list(react_agent.execute_stream("query")) == ["完成"]
+    assert stream.config == {"recursion_limit": 9}
 
 
 def test_api_stream_formats_sequenced_events(monkeypatch):

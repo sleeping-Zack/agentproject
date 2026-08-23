@@ -13,12 +13,14 @@ from agent.runner import (
     AutoRoutingBackend,
 )
 from agent.answer_schema import AnswerClaim, StructuredAnswer
+from agent.budget import current_budget_manager
 from agent.verifier import AnswerVerifier, VerifyResult
 from agent.tools.registry import build_default_tool_registry
 from services.approval_store import SQLiteApprovalStore
 from services.artifact_store import SQLiteArtifactStore
 from services.memory_store import SQLiteMemoryStore
 from services.persistence import SQLiteStore
+from observability.context import request_context
 
 
 class FakeBackend:
@@ -31,7 +33,11 @@ class FakeBackend:
 
 
 class NoToolBackend:
+    def __init__(self):
+        self.calls = 0
+
     def __call__(self, task: AgentTask, state):
+        self.calls += 1
         return AgentBackendResult(answer="防滑砖建议使用低水量拖地。")
 
 
@@ -61,11 +67,12 @@ def _runner(tmp_path, max_steps=8, conversation_memory=None):
 
 
 def test_runner_rejects_answer_when_declared_required_tool_was_not_executed(tmp_path):
+    backend = NoToolBackend()
     runner = AgentRunner(
-        backend=NoToolBackend(),
+        backend=backend,
         approval_store=SQLiteApprovalStore(str(tmp_path / "approvals.db")),
         artifact_store=SQLiteArtifactStore(str(tmp_path / "artifacts.db")),
-        max_verification_retries=0,
+        max_verification_retries=1,
     )
 
     result = runner.run(
@@ -81,6 +88,9 @@ def test_runner_rejects_answer_when_declared_required_tool_was_not_executed(tmp_
     assert result.verifier.missing_required_tools == ["rag_summarize"]
     assert "required_tool_missing" in result.verifier.reasons
     assert result.verifier.citation_coverage == 0.0
+    assert backend.calls == 1
+    assert "未能完成必要的知识库检索" in result.answer
+    assert "回答未通过证据校验" not in result.answer
 
 
 def test_report_access_arguments_preserve_chinese_month_and_explicit_user():
@@ -110,6 +120,33 @@ def test_runner_completes_and_persists_final_answer(tmp_path):
     assert result.state.artifacts
     artifacts = runner.artifact_store.list_artifacts("req-run-1", tenant_id="tenant-a")
     assert artifacts[0].payload["answer"] == result.answer
+
+
+def test_runner_binds_shared_budget_while_committing_memory(tmp_path):
+    class MemoryProbe:
+        manager = None
+        request_id = None
+
+        @staticmethod
+        def apply_response_policies(answer, **_kwargs):
+            return answer
+
+        def commit_turn(self, **_kwargs):
+            self.manager = current_budget_manager()
+            self.request_id = request_context().request_id
+
+    memory = MemoryProbe()
+    runner = AgentRunner(
+        backend=FakeBackend(),
+        approval_store=SQLiteApprovalStore(str(tmp_path / "approvals.db")),
+        artifact_store=SQLiteArtifactStore(str(tmp_path / "artifacts.db")),
+        conversation_memory=memory,
+    )
+
+    result = runner.run(AgentTask(query="怎么保养尘盒", request_id="req-memory-budget"))
+
+    assert memory.manager is result.state.budget.manager
+    assert memory.request_id == "req-memory-budget"
 
 
 def test_runner_pauses_for_sensitive_tool_approval(tmp_path):
@@ -342,6 +379,85 @@ class _RetryThenAcceptFallbackVerifier:
                 reasons=["unsupported_claims"],
             )
         return AnswerVerifier().verify(answer=answer, **kwargs)
+
+
+class _CountingRouter:
+    def __init__(self):
+        self.calls = 0
+
+    def route(self, query, context=None):
+        self.calls += 1
+        from agent.planner import TaskRoutingDecision
+
+        return TaskRoutingDecision(
+            execution_mode="react",
+            complexity_score=1,
+            reasons=("test_route",),
+        )
+
+
+class _RepairableBackend:
+    def __init__(self):
+        self.execution_modes = []
+        self.queries = []
+
+    def __call__(self, task, state):
+        self.execution_modes.append(task.execution_mode)
+        self.queries.append(task.query)
+        if task.execution_mode == "direct":
+            return AgentBackendResult(answer="清理滚刷。[manual-1]")
+        return AgentBackendResult(
+            answer="滚刷无需清理。",
+            evidence=[{"id": "manual-1", "content": "每次使用后清理滚刷。"}],
+            tool_results=[
+                {
+                    "tool": "rag_summarize",
+                    "status": "success",
+                    "content": "每次使用后清理滚刷。",
+                }
+            ],
+        )
+
+
+class _RepairVerifier:
+    def verify(self, *, answer, **kwargs):
+        if answer == "滚刷无需清理。":
+            return VerifyResult(
+                passed=False,
+                action="retry",
+                score=1.0,
+                reasons=["unsupported_claims"],
+            )
+        return VerifyResult(passed=True, action="pass", score=10.0)
+
+
+def test_verification_retry_repairs_from_evidence_without_rerouting_or_tools(tmp_path):
+    router = _CountingRouter()
+    react_backend = _RepairableBackend()
+    backend = AutoRoutingBackend(
+        router=router,
+        react_backend=react_backend,
+        planner_backend=react_backend,
+    )
+    runner = AgentRunner(
+        backend=backend,
+        verifier=_RepairVerifier(),
+        approval_store=SQLiteApprovalStore(str(tmp_path / "approvals.db")),
+        artifact_store=SQLiteArtifactStore(str(tmp_path / "artifacts.db")),
+        max_verification_retries=1,
+    )
+
+    result = runner.run(
+        AgentTask(query="滚刷需要清理吗", request_id="req-targeted-repair")
+    )
+
+    assert result.state.status == "completed"
+    assert result.answer == "清理滚刷。[manual-1]"
+    assert router.calls == 1
+    assert react_backend.execution_modes == ["react", "direct"]
+    assert "每次使用后清理滚刷" in react_backend.queries[1]
+    assert len(result.state.observations) == 1
+    assert len(result.state.tool_calls) == 1
 
 
 def test_runner_uses_verified_partial_instead_of_starting_impossible_retry(tmp_path):

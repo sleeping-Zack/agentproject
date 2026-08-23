@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage
 
 from agent.answer_schema import AnswerClaim, StructuredAnswer
 from agent.budget import BudgetManager
+from agent.budgeted_text_model import invoke_budgeted_text_model
 from agent.memory import ConversationMemory
 from agent.long_term_memory import (
     HybridMemoryExtractor,
@@ -59,11 +60,13 @@ def _default_session_store():
 def _memory_extraction_model(prompt: str) -> str:
     started_at = metrics_registry.now()
     model = chat_model.resolve()
-    configured = model.bind(
+    response = invoke_budgeted_text_model(
+        model,
+        prompt,
+        max_output_tokens=int(os.getenv("AGENT_MEMORY_EXTRACTION_MAX_TOKENS", "900")),
+        operation="memory-extraction",
         temperature=0,
-        max_tokens=int(os.getenv("AGENT_MEMORY_EXTRACTION_MAX_TOKENS", "900")),
     )
-    response = configured.invoke(prompt)
     usage = getattr(response, "usage_metadata", None) or {}
     response_metadata = getattr(response, "response_metadata", None) or {}
     token_usage = (
@@ -184,13 +187,18 @@ class ReactAgent:
                 lambda: rag.rag_summarize_result(
                     rag_query,
                     tenant_id=context.get("tenant_id"),
+                    budget_manager=task.budget_manager,
                 ),
                 result_text=lambda value: value.answer,
             )
             self._record_plan_evidence(context.get("request_id"), result.evidence)
             content = self._replace_numeric_citations(result.answer, result.evidence)
             verification = result.verification or {}
-            success = verification.get("passed", True) is not False
+            is_knowledge_gap = result.business_status == "empty"
+            success = (
+                is_knowledge_gap
+                or verification.get("passed", True) is not False
+            )
             if not success and result.evidence:
                 content = self._extractive_rag_fallback(result.evidence)
                 success = True
@@ -200,9 +208,7 @@ class ReactAgent:
                 success=success,
                 content=content,
                 error=(
-                    "rag_empty"
-                    if result.business_status == "empty"
-                    else ",".join(verification.get("reasons") or ())
+                    ",".join(verification.get("reasons") or ())
                     if not success
                     else None
                 ),
@@ -221,6 +227,7 @@ class ReactAgent:
                 month=task.args.get("month"),
                 tenant_id=context.get("tenant_id"),
                 intent="report",
+                budget_manager=task.budget_manager,
             )
             evidence = state.get("evidence") or []
             self._record_plan_evidence(context.get("request_id"), evidence)
@@ -305,6 +312,19 @@ class ReactAgent:
             business_status = getattr(result, "business_status", None)
             if business_status:
                 event.metadata["business_status"] = str(business_status)
+            verification = getattr(result, "verification", None)
+            if isinstance(verification, dict):
+                event.metadata["verification"] = {
+                    key: verification[key]
+                    for key in (
+                        "passed",
+                        "action",
+                        "reasons",
+                        "dense_relevance",
+                        "sparse_relevance",
+                    )
+                    if key in verification
+                }
             return result
 
     @staticmethod
@@ -533,6 +553,12 @@ class ReactAgent:
                             input_dict,
                             stream_mode=["messages", "updates"],
                             context=runtime_context,
+                            config={
+                                "recursion_limit": max(
+                                    1,
+                                    int(os.getenv("AGENT_MAX_REACT_RECURSION", "12")),
+                                )
+                            },
                             version="v2",
                     ):
                         if emit_events and event_bus.is_cancelled(request_id):

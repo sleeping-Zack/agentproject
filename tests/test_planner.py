@@ -140,6 +140,30 @@ def test_parallel_executor_tasks_share_one_budget_manager():
     )
 
 
+def test_generic_model_tasks_do_not_consume_tool_call_budget():
+    manager = BudgetManager(max_tool_calls=0)
+    executor = PlanExecutor(max_workers=2, budget_manager=manager)
+    executor.register_handler(
+        "generic",
+        lambda task: SubTaskResult(
+            id=task.id,
+            kind=task.kind,
+            success=True,
+            content=task.id,
+        ),
+    )
+
+    results = executor.execute(
+        [
+            SubTask(id="t1", kind="generic", description="纯模型回答"),
+            SubTask(id="t2", kind="generic", description="纯模型总结"),
+        ]
+    )
+
+    assert all(result.success for result in results)
+    assert manager.snapshot()["used_tool_calls"] == 0
+
+
 def test_executor_respects_dependency_graph_and_passes_verified_results():
     executor = PlanExecutor(max_workers=4)
     observed = {}
@@ -363,6 +387,53 @@ def test_planner_agent_replans_failed_subtask_once():
     assert any(task.id == "fallback-t1" for task in result.plan)
     assert any(item.kind == "generic" and item.success for item in result.results)
     assert "fallback answer" in result.answer
+
+
+def test_planner_agent_deduplicates_same_query_generic_fallbacks():
+    planner = TaskPlanner(
+        llm_planner=lambda query: [
+            SubTask(id="t1", kind="rag_qa", description="检索一", args={"query": query}),
+            SubTask(id="t2", kind="weather", description="检索二", args={"query": query}),
+        ]
+    )
+    executor = PlanExecutor(max_workers=2)
+    for kind in ("rag_qa", "weather"):
+        executor.register_handler(
+            kind,
+            lambda task: SubTaskResult(
+                id=task.id,
+                kind=task.kind,
+                success=False,
+                content="",
+                error="temporary_failure",
+            ),
+        )
+    fallback_calls = []
+
+    def handle_generic(task):
+        fallback_calls.append(task)
+        return SubTaskResult(
+            id=task.id,
+            kind=task.kind,
+            success=True,
+            content="fallback answer",
+        )
+
+    executor.register_handler("generic", handle_generic)
+    agent = PlannerAgent(
+        planner=planner,
+        executor=executor,
+        validator=PlanValidator(),
+        replanner=Replanner(),
+        max_replans=1,
+    )
+
+    result = agent.run("同一个原始问题")
+
+    fallback_tasks = [task for task in result.plan if task.kind == "generic"]
+    assert len(fallback_tasks) == 1
+    assert fallback_tasks[0].args["query"] == "同一个原始问题"
+    assert len(fallback_calls) == 1
 
 
 def test_replanner_does_not_drop_dependencies_after_verification_or_budget_failure():

@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
-from agent.budget import BudgetManager
+from agent.budget import (
+    DEFAULT_MAX_COST,
+    DEFAULT_MAX_STEPS,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_MAX_TOOL_CALLS,
+    BudgetManager,
+)
 
 
 RunStatus = Literal[
@@ -21,10 +27,10 @@ class Budget:
 
     def __init__(
         self,
-        max_steps: int = 8,
-        max_tool_calls: int = 5,
-        max_tokens: int = 8000,
-        max_cost: float = 1.0,
+        max_steps: int = DEFAULT_MAX_STEPS,
+        max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        max_cost: float = DEFAULT_MAX_COST,
         used_steps: int = 0,
         used_tool_calls: int = 0,
         used_tokens: int = 0,

@@ -855,6 +855,10 @@ class Replanner:
                     "原计划失败后走默认回答，"
                     f"失败任务={failed_task.id}，原因={failure_reason}"
                 ),
-                args={"query": query, "failure_reason": failure_reason},
+                args={
+                    "query": query,
+                    "original_query": query,
+                    "failure_reason": failure_reason,
+                },
             )
         ]

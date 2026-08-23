@@ -6,7 +6,7 @@ from utils.prompt_loader import (load_prompt_document, load_rag_prompts,
 def test_load_prompt_document_parses_frontmatter():
     doc = load_prompt_document("main")
     assert doc.name == "main"
-    assert doc.version == "v4"
+    assert doc.version == "v5"
     assert any("fill_context_for_report" in entry for entry in doc.changelog)
 
 
@@ -20,7 +20,7 @@ def test_loading_prompt_records_version_in_context():
     with bind_request_context(request_id="r1"):
         load_system_prompts()
         ctx = request_context()
-        assert ctx.prompt_version == "main:v4"
+        assert ctx.prompt_version == "main:v5"
 
 
 def test_all_three_prompts_are_versioned():

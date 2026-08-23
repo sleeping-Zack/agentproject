@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+from agent.budget import BudgetManager
 from agent.workflows.report_workflow import ReportWorkflow
 
 
@@ -56,3 +59,26 @@ def test_report_workflow_accepts_governed_structured_intent_without_keywords():
     assert result["intent"] == "report"
     assert result["fallback"] is False
     assert "定时清扫使用率" in result["answer"]
+
+
+def test_report_workflow_passes_shared_budget_to_rag_generation():
+    manager = BudgetManager(max_tokens=4000)
+
+    class BudgetAwareRagService:
+        def __init__(self):
+            self.manager = None
+
+        def rag_summarize_result(self, query, *, tenant_id=None, budget_manager=None):
+            self.manager = budget_manager
+            return SimpleNamespace(
+                answer="建议关注电池保养。",
+                verification={"passed": True},
+                evidence=[],
+            )
+
+    rag_service = BudgetAwareRagService()
+    workflow = ReportWorkflow(tool_service=FakeToolService(), rag_service=rag_service)
+
+    workflow.run("帮我生成本月使用报告", budget_manager=manager)
+
+    assert rag_service.manager is manager

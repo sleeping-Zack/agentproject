@@ -3,7 +3,12 @@ from uuid import uuid4
 
 import pytest
 
-from agent.budget import BudgetManager
+from agent.budget import (
+    DEFAULT_MAX_STEPS,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_MAX_TOOL_CALLS,
+    BudgetManager,
+)
 from agent.planner import (
     PlanExecutor,
     PlanRunResult,
@@ -176,6 +181,50 @@ def test_semantic_classifier_parses_strict_json_and_accounts_for_its_model_call(
     assert proposal.goals[1].depends_on == ("g1",)
     assert manager.snapshot()["used_model_calls"] == 1
     assert manager.used_tokens == 170
+
+
+def test_semantic_classifier_failure_commits_only_estimated_input(monkeypatch):
+    monkeypatch.setenv("AGENT_ESTIMATED_COST_PER_1K_TOKENS", "0.001")
+    manager = BudgetManager(max_tokens=4000, max_cost=1.0)
+    classifier = SemanticTaskClassifier(
+        model_invoker=lambda _prompt, _context, _max_tokens: (_ for _ in ()).throw(
+            RuntimeError("provider unavailable")
+        ),
+        max_output_tokens=700,
+    )
+    context = RoutingContext(
+        available_tools=("rag_summarize",),
+        budget_manager=manager,
+    )
+    prompt = classifier._build_prompt("分析设备故障", context)
+    estimated_input = classifier._estimate_tokens(prompt)
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        classifier("分析设备故障", context)
+
+    snapshot = manager.snapshot()
+    assert snapshot["used_model_calls"] == 1
+    assert snapshot["used_tokens"] == estimated_input
+    assert snapshot["used_tokens"] < estimated_input + classifier.max_output_tokens
+    assert snapshot["reserved_tokens"] == 0
+    assert snapshot["used_cost"] == pytest.approx(
+        round(estimated_input / 1000 * 0.001, 6)
+    )
+
+
+def test_routing_context_uses_shared_budget_defaults():
+    context = RoutingContext()
+
+    assert (context.remaining_steps, context.remaining_tool_calls, context.remaining_tokens) == (
+        DEFAULT_MAX_STEPS,
+        DEFAULT_MAX_TOOL_CALLS,
+        DEFAULT_MAX_TOKENS,
+    )
+    assert (
+        DEFAULT_MAX_STEPS,
+        DEFAULT_MAX_TOOL_CALLS,
+        DEFAULT_MAX_TOKENS,
+    ) == (8, 8, 32000)
 
 
 def test_invalid_semantic_output_uses_deterministic_fallback():
@@ -452,6 +501,43 @@ def test_auto_routing_backend_invokes_only_the_selected_execution_path(
     assert router.queries == [task.query]
     assert len(react_backend.calls) == react_calls
     assert len(planner_backend.calls) == planner_calls
+
+
+def test_required_single_rag_lookup_uses_the_deterministic_planner_path():
+    router = TaskRouter(
+        semantic_enabled=True,
+        semantic_classifier=lambda _query, _context: SemanticRouteProposal(
+            execution_mode="react",
+            goals=(
+                RoutingGoal(
+                    id="g1",
+                    description="查询各型号售价并比较最高价",
+                    required_tools=("rag_summarize",),
+                    tool_input="扫地机器人 具体型号 售价 最高价",
+                ),
+            ),
+            confidence=0.96,
+            reasons=("semantic_single_goal",),
+        ),
+    )
+    react_backend = _SpyBackend("react answer")
+    planner_backend = _SpyBackend("knowledge answer")
+    backend = AutoRoutingBackend(
+        router=router,
+        react_backend=react_backend,
+        planner_backend=planner_backend,
+    )
+    task = AgentTask(query="讲一下最贵的机器人是哪一个")
+    trace_recorder.start_trace(task.request_id, task.session_id)
+
+    result = backend(task, SimpleNamespace())
+
+    assert result.answer == "knowledge answer"
+    assert task.execution_mode == "plan_execute"
+    assert task.routing_decision is not None
+    assert "required_rag_execution_guarantee" in task.routing_decision.reasons
+    assert len(react_backend.calls) == 0
+    assert len(planner_backend.calls) == 1
 
 
 def test_auto_routing_backend_publishes_a_structured_routing_event():

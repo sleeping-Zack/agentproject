@@ -27,7 +27,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional
 
-from agent.budget import BudgetExceeded, BudgetManager, Reservation
+from agent.budget import (
+    DEFAULT_MAX_STEPS,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_MAX_TOOL_CALLS,
+    BudgetExceeded,
+    BudgetManager,
+    Reservation,
+)
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
 
@@ -159,9 +166,9 @@ class RoutingContext:
     available_tools: tuple[str, ...] = ()
     tool_manifest: tuple[Mapping[str, Any], ...] = ()
     recent_messages: tuple[str, ...] = ()
-    remaining_steps: int = 8
-    remaining_tool_calls: int = 5
-    remaining_tokens: int = 12000
+    remaining_steps: int = DEFAULT_MAX_STEPS
+    remaining_tool_calls: int = DEFAULT_MAX_TOOL_CALLS
+    remaining_tokens: int = DEFAULT_MAX_TOKENS
     prior_decision: Optional[TaskRoutingDecision] = None
     verification_feedback: Optional[Mapping[str, Any]] = None
     budget_manager: Optional[BudgetManager] = field(
@@ -206,7 +213,15 @@ class SemanticTaskClassifier:
             response = self.model_invoker(prompt, context, self.max_output_tokens)
         except BaseException:
             if reservation is not None:
-                context.budget_manager.commit_model_call(reservation)
+                estimated_input = reservation.estimated_input_tokens
+                cost_per_1k = float(
+                    os.getenv("AGENT_ESTIMATED_COST_PER_1K_TOKENS", "0.001")
+                )
+                context.budget_manager.commit_model_call(
+                    reservation,
+                    actual_tokens=estimated_input,
+                    actual_cost=round((estimated_input / 1000.0) * cost_per_1k, 6),
+                )
             raise
         if reservation is not None:
             actual_tokens, actual_cost = self._usage(response)
@@ -1035,19 +1050,20 @@ class PlanExecutor:
         manager = budget_manager or self.budget_manager
         reservation: Reservation | None = None
         if manager is not None:
-            try:
-                reservation = manager.reserve_tool_call(task.kind)
-            except BudgetExceeded as exc:
-                result = SubTaskResult(
-                    id=task.id,
-                    kind=task.kind,
-                    success=False,
-                    content="",
-                    error=exc.reason,
-                )
-                self._emit_step_completed(event_callback, task, result)
-                return result
             task.budget_manager = manager
+            if task.kind != "generic":
+                try:
+                    reservation = manager.reserve_tool_call(task.kind)
+                except BudgetExceeded as exc:
+                    result = SubTaskResult(
+                        id=task.id,
+                        kind=task.kind,
+                        success=False,
+                        content="",
+                        error=exc.reason,
+                    )
+                    self._emit_step_completed(event_callback, task, result)
+                    return result
         start = metrics_registry.now()
         try:
             result = handler(task)
@@ -1384,14 +1400,24 @@ class PlannerAgent:
             return plan, results
 
         fallback_plan: List[SubTask] = []
+        seen_generic_queries: set[str] = set()
         for task, result in failed:
-            fallback_plan.extend(
-                self.replanner.replan(
-                    query=query,
-                    failed_task=task,
-                    failure_reason=result.error or "subtask_failed",
-                )
+            candidates = self.replanner.replan(
+                query=query,
+                failed_task=task,
+                failure_reason=result.error or "subtask_failed",
             )
+            for candidate in candidates:
+                original_query = str(
+                    candidate.args.get("original_query")
+                    or candidate.args.get("query")
+                    or ""
+                ).strip()
+                if candidate.kind == "generic" and original_query:
+                    if original_query in seen_generic_queries:
+                        continue
+                    seen_generic_queries.add(original_query)
+                fallback_plan.append(candidate)
         if not fallback_plan:
             return plan, results
         self._attach_task_context(fallback_plan, task_context)

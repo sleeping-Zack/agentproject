@@ -30,6 +30,16 @@ def test_format_citations_includes_source_metadata():
     assert citations == "[1] 故障排除.txt#page=1"
 
 
+def test_format_citations_can_use_stable_evidence_ids():
+    docs = [
+        Doc("主刷缠绕毛发时应清理滚刷", {"source_name": "故障排除.txt", "page": 1}),
+    ]
+
+    citations = format_citations(docs, evidence_ids=["故障排除.txt#c41"])
+
+    assert citations == "[故障排除.txt#c41] 故障排除.txt#page=1"
+
+
 def test_markdown_section_title_only_accepts_explicit_heading():
     assert markdown_section_title("\n## 滚刷故障\n处理步骤") == "滚刷故障"
     assert markdown_section_title("普通正文\n处理步骤") is None

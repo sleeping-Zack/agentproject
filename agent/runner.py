@@ -6,12 +6,23 @@ import inspect
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from agent.answer_schema import AnswerClaim, StructuredAnswer
-from agent.budget import BudgetExceeded, Reservation
+from agent.budget import (
+    DEFAULT_MAX_COST,
+    DEFAULT_MAX_MODEL_OUTPUT_TOKENS,
+    DEFAULT_MAX_STEPS,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_MAX_TOOL_CALLS,
+    DEFAULT_MAX_VERIFICATION_RETRIES,
+    DEFAULT_MIN_REPAIR_TOKENS,
+    BudgetExceeded,
+    Reservation,
+    bind_budget_manager,
+)
 from agent.memory import ConversationMemory
 from agent.planner import RoutingContext, TaskRouter, TaskRoutingDecision
 from agent.policies import PolicyAction, ToolPolicy
@@ -19,20 +30,16 @@ from agent.state import AgentState, ArtifactRef, Budget, Observation, ToolCallRe
 from agent.tools.registry import ToolRegistry, build_default_tool_registry
 from agent.verifier import AnswerVerifier, VerifyResult, build_default_answer_verifier
 from observability.event_bus import EventBackpressureError, event_bus
+from observability.context import bind_request_context
 from observability.metrics import metrics_registry
 from observability.tracing import trace_recorder
+from rag.rag_utils import knowledge_gap_answer
 from safety.security import UnsafeInputError, assert_safe_user_input
 from services.approval_store import ApprovalStore
 from services.artifact_store import ArtifactStore
 from services.factories import create_approval_store, create_artifact_store
 from utils.config_handler import agent_conf
 from utils.streaming import get_final_response
-
-
-DEFAULT_MAX_MODEL_OUTPUT_TOKENS = int(
-    os.getenv("AGENT_MAX_MODEL_OUTPUT_TOKENS", "12000")
-)
-DEFAULT_MAX_RUN_TOKENS = int(os.getenv("AGENT_MAX_RUN_TOKENS", "120000"))
 
 
 @dataclass
@@ -66,6 +73,157 @@ class AgentBackendResult:
     structured_answer: Optional[StructuredAnswer] = None
     safe_fallback_answer: str = ""
     safe_fallback_structured_answer: Optional[StructuredAnswer] = None
+    safe_fallback_strategy: str = "verified_evidence_excerpt"
+
+
+def _public_citation_evidence(
+    observations: List[Observation],
+    answer: str,
+) -> List[Dict[str, Any]]:
+    """Return the cited evidence fields that are safe for client-side previews."""
+
+    cited: List[tuple[int, Dict[str, Any]]] = []
+    seen_ids: set[str] = set()
+    for observation in observations:
+        item = observation.metadata if isinstance(observation.metadata, dict) else {}
+        metadata = item.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        raw_evidence_id = (
+            item.get("id") or item.get("evidence_id") or observation.source or ""
+        )
+        if not isinstance(raw_evidence_id, (str, int, float)):
+            continue
+        evidence_id = str(raw_evidence_id).strip()
+        if not evidence_id or evidence_id in seen_ids:
+            continue
+        citation = re.search(rf"\[\s*{re.escape(evidence_id)}\s*\]", answer or "")
+        if citation is None:
+            continue
+
+        raw_source = (
+            item.get("source")
+            or metadata.get("source_name")
+            or metadata.get("source")
+            or "知识库"
+        )
+        raw_source = raw_source if isinstance(raw_source, str) else "知识库"
+        # A retrieved document may carry an absolute source path. The client only
+        # needs its friendly file name, never deployment or workstation paths.
+        source = raw_source.strip().replace("\\", "/").rsplit("/", 1)[-1][:200]
+        raw_content = item.get("content") or observation.content
+        raw_content = raw_content if isinstance(raw_content, str) else ""
+        excerpt = " ".join(raw_content.split())
+        if len(excerpt) > 360:
+            excerpt = f"{excerpt[:359]}…"
+
+        public_item: Dict[str, Any] = {
+            "id": evidence_id,
+            "source": source or "知识库",
+            "excerpt": excerpt,
+        }
+        for public_key, metadata_key in (
+            ("title", "document_title"),
+            ("section", "section_title"),
+            ("chunk_index", "chunk_index"),
+        ):
+            value = metadata.get(metadata_key)
+            if value in (None, ""):
+                continue
+            if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                continue
+            if public_key == "title" and isinstance(value, str):
+                value = value.strip().replace("\\", "/").rsplit("/", 1)[-1]
+            public_item[public_key] = value if not isinstance(value, str) else value[:200]
+
+        page = metadata.get("page_label")
+        if page in (None, ""):
+            page = metadata.get("page")
+        if not isinstance(page, bool) and isinstance(page, (str, int, float)):
+            public_item["page"] = page if not isinstance(page, str) else page[:40]
+
+        seen_ids.add(evidence_id)
+        cited.append((citation.start(), public_item))
+
+    cited.sort(key=lambda pair: pair[0])
+    return [item for _, item in cited]
+
+
+def _targeted_repair_task(
+    task: AgentTask,
+    backend_result: AgentBackendResult,
+    verifier_result: VerifyResult,
+) -> AgentTask:
+    evidence_sections = []
+    for item in backend_result.evidence[:5]:
+        evidence_id = str(item.get("id") or item.get("source") or "evidence")
+        content = str(item.get("content") or "").strip()[:300]
+        if content:
+            evidence_sections.append(f"[{evidence_id}] {content}")
+    evidence_text = "\n".join(evidence_sections) or "（没有可用证据）"
+    reasons = "、".join(str(reason) for reason in verifier_result.reasons) or "证据校验失败"
+    prompt = (
+        "你正在修复一份未通过证据校验的回答。只允许使用下方已有证据，"
+        "不要调用工具、不要补充证据外的事实。删除无法支持的结论，并在每项结论后"
+        "用 [证据ID] 标注来源。直接输出修复后的最终回答。\n\n"
+        f"原始问题：\n{task.query[:600]}\n\n"
+        f"校验失败原因：\n{reasons}\n\n"
+        f"待修复回答：\n{backend_result.answer[:1000]}\n\n"
+        f"可用证据：\n{evidence_text}"
+    )
+    return AgentTask(
+        query=prompt,
+        session_id=task.session_id,
+        tenant_id=task.tenant_id,
+        user_id=task.user_id,
+        data_user_id=task.data_user_id,
+        user_role=task.user_role,
+        scene=task.scene,
+        request_id=task.request_id,
+        approval_id=task.approval_id,
+        emit_events=task.emit_events,
+        execution_mode="direct",
+        routing_decision=TaskRoutingDecision(
+            execution_mode="direct",
+            complexity_score=0,
+            reasons=("verification_targeted_repair",),
+            confidence=1.0,
+            decision_source="verification_targeted_repair",
+            proposed_mode="direct",
+        ),
+        required_tools=(),
+    )
+
+
+def _merge_repair_result(
+    previous: AgentBackendResult,
+    repaired: AgentBackendResult,
+) -> AgentBackendResult:
+    evidence: List[Dict[str, Any]] = []
+    seen_evidence: set[tuple[str, str]] = set()
+    for item in (*previous.evidence, *repaired.evidence):
+        key = (
+            str(item.get("id") or item.get("source") or ""),
+            str(item.get("content") or ""),
+        )
+        if key in seen_evidence:
+            continue
+        seen_evidence.add(key)
+        evidence.append(item)
+    return AgentBackendResult(
+        answer=repaired.answer,
+        evidence=evidence,
+        tool_results=[*previous.tool_results, *repaired.tool_results],
+        model_name=repaired.model_name,
+        tokens_in=repaired.tokens_in,
+        tokens_out=repaired.tokens_out,
+        cost=repaired.cost,
+        cost_mode=repaired.cost_mode,
+        budget_accounted=repaired.budget_accounted,
+        structured_answer=repaired.structured_answer,
+        safe_fallback_answer=previous.safe_fallback_answer,
+        safe_fallback_structured_answer=previous.safe_fallback_structured_answer,
+        safe_fallback_strategy=previous.safe_fallback_strategy,
+    )
 
 
 @dataclass
@@ -76,6 +234,7 @@ class AgentRunResult:
     approval_id: Optional[str] = None
     artifacts: List[ArtifactRef] = field(default_factory=list)
     verifier: Optional[VerifyResult] = None
+    evidence: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class ReactAgentBackend:
@@ -136,7 +295,10 @@ class ReactAgentBackend:
         evidence = self._extract_evidence(trace_payload)
         tokens_in, tokens_out, cost, cost_mode = self._extract_usage(trace_payload)
         tool_results = self._extract_tool_results(trace_payload)
-        fallback_answer, fallback_structured = self._evidence_fallback(evidence)
+        fallback_answer, fallback_structured, fallback_strategy = self._evidence_fallback(
+            evidence,
+            tool_results,
+        )
         return AgentBackendResult(
             answer=get_final_response(chunks),
             evidence=evidence,
@@ -149,12 +311,52 @@ class ReactAgentBackend:
             budget_accounted=budget_manager is not None and self.manages_budget,
             safe_fallback_answer=fallback_answer,
             safe_fallback_structured_answer=fallback_structured,
+            safe_fallback_strategy=fallback_strategy,
         )
+
+    def repair(
+        self,
+        task: AgentTask,
+        state: AgentState,
+        previous: AgentBackendResult,
+        verifier_result: VerifyResult,
+    ) -> AgentBackendResult:
+        repair_task = _targeted_repair_task(task, previous, verifier_result)
+        return _merge_repair_result(previous, self(repair_task, state))
 
     @staticmethod
     def _evidence_fallback(
         evidence: List[Dict[str, Any]],
-    ) -> tuple[str, Optional[StructuredAnswer]]:
+        tool_results: Optional[List[Dict[str, Any]]] = None,
+    ) -> tuple[str, Optional[StructuredAnswer], str]:
+        evidence_ids = {
+            str(item.get("id") or item.get("evidence_id") or "").strip()
+            for item in evidence
+        }
+        rag_results = [
+            item
+            for item in (tool_results or [])
+            if str(item.get("tool") or "") == "rag_summarize"
+        ]
+        for result in reversed(rag_results):
+            metadata = result.get("metadata") or {}
+            verification = metadata.get("verification") or {}
+            content = str(result.get("content") or "").strip()
+            has_current_citation = any(
+                evidence_id and evidence_id in content for evidence_id in evidence_ids
+            ) or (
+                len(rag_results) == 1
+                and bool(re.search(r"\[\s*\d+\s*\]", content))
+            )
+            if (
+                str(result.get("status") or "") == "success"
+                and verification.get("passed") is True
+                and not result.get("result_truncated")
+                and content
+                and has_current_citation
+            ):
+                return content, None, "verified_rag_answer"
+
         claims: List[AnswerClaim] = []
         citations: List[str] = []
         lines = ["生成式回答未通过校验，以下为知识库中可直接核验的原文："]
@@ -174,12 +376,16 @@ class ReactAgentBackend:
                 if claim.strip()
             )
         if not claims:
-            return "", None
+            return "", None, "verified_evidence_excerpt"
         answer = "\n".join(lines)
-        return answer, StructuredAnswer(
-            summary=answer,
-            claims=claims,
-            citations=citations,
+        return (
+            answer,
+            StructuredAnswer(
+                summary=answer,
+                claims=claims,
+                citations=citations,
+            ),
+            "verified_evidence_excerpt",
         )
 
     @staticmethod
@@ -192,17 +398,12 @@ class ReactAgentBackend:
                 continue
             if event.get("category") != "tool":
                 continue
-            metadata = event.get("metadata", {})
+            metadata = dict(event.get("metadata") or {})
             status = "error" if event.get("error") else "success"
-            if event.get("name") == "rag_summarize" and (
-                metadata.get("business_status") or pending_rag_results
-            ):
-                rag_metadata = (
-                    metadata
-                    if metadata.get("business_status")
-                    else pending_rag_results.pop(0)
-                )
-                business_status = str(rag_metadata.get("business_status") or "")
+            if event.get("name") == "rag_summarize":
+                rag_metadata = pending_rag_results.pop(0) if pending_rag_results else {}
+                metadata = {**rag_metadata, **metadata}
+                business_status = str(metadata.get("business_status") or "")
                 if business_status in {
                     "success",
                     "degraded",
@@ -518,6 +719,7 @@ class AutoRoutingBackend:
                 failure_reason=str(exc),
             )
 
+        decision = self._guarantee_required_knowledge_lookup(decision)
         metrics_registry.inc_counter(
             "agent_execution_route_total",
             {"mode": decision.execution_mode},
@@ -532,6 +734,31 @@ class AutoRoutingBackend:
             self._publish_transition_event(task, decision)
         return decision
 
+    @staticmethod
+    def _guarantee_required_knowledge_lookup(
+        decision: TaskRoutingDecision,
+    ) -> TaskRoutingDecision:
+        """Use the deterministic RAG handler when routing declares it mandatory."""
+
+        if (
+            decision.execution_mode == "plan_execute"
+            or decision.required_tools != ("rag_summarize",)
+            or len(decision.goals) != 1
+            or decision.unavailable_tools
+        ):
+            return decision
+        previous_mode = decision.execution_mode
+        return replace(
+            decision,
+            execution_mode="plan_execute",
+            reasons=tuple(
+                dict.fromkeys(
+                    (*decision.reasons, "required_rag_execution_guarantee")
+                )
+            ),
+            transition=f"{previous_mode}_to_plan_execute",
+        )
+
     def __call__(self, task: AgentTask, state: AgentState) -> AgentBackendResult:
         decision = task.routing_decision
         if decision is None or getattr(state, "routing_feedback", None):
@@ -539,6 +766,19 @@ class AutoRoutingBackend:
         if decision.execution_mode == "plan_execute":
             return self.planner_backend(task, state)
         return self.react_backend(task, state)
+
+    def repair(
+        self,
+        task: AgentTask,
+        state: AgentState,
+        previous: AgentBackendResult,
+        verifier_result: VerifyResult,
+    ) -> AgentBackendResult:
+        """Repair the answer with existing evidence, bypassing routing and tools."""
+
+        repair_task = _targeted_repair_task(task, previous, verifier_result)
+        repaired = self.react_backend(repair_task, state)
+        return _merge_repair_result(previous, repaired)
 
     def _route(
         self,
@@ -668,13 +908,13 @@ class AgentRunner:
         artifact_store: Optional[ArtifactStore] = None,
         conversation_memory: Optional[ConversationMemory] = None,
         verifier: Optional[AnswerVerifier] = None,
-        max_steps: int = 8,
-        max_tool_calls: int = 5,
-        max_tokens: int = DEFAULT_MAX_RUN_TOKENS,
-        max_cost: float = 1.0,
+        max_steps: int = DEFAULT_MAX_STEPS,
+        max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        max_cost: float = DEFAULT_MAX_COST,
         max_model_output_tokens: Optional[int] = None,
         max_duration_seconds: Optional[float] = None,
-        max_verification_retries: int = 1,
+        max_verification_retries: int = DEFAULT_MAX_VERIFICATION_RETRIES,
         estimated_cost_per_1k_tokens: float = float(
             os.getenv("AGENT_ESTIMATED_COST_PER_1K_TOKENS", "0.001")
         ),
@@ -738,13 +978,18 @@ class AgentRunner:
             return self._result(state, refusal)
 
         if self.conversation_memory is not None and task.user_id:
-            memory_command = self.conversation_memory.handle_explicit_command(
-                tenant_id=task.tenant_id,
-                user_id=task.user_id,
-                session_id=task.session_id,
+            with bind_budget_manager(state.budget.manager), bind_request_context(
                 request_id=task.request_id,
-                user_message=task.query,
-            )
+                session_id=task.session_id,
+                tenant_id=task.tenant_id,
+            ):
+                memory_command = self.conversation_memory.handle_explicit_command(
+                    tenant_id=task.tenant_id,
+                    user_id=task.user_id,
+                    session_id=task.session_id,
+                    request_id=task.request_id,
+                    user_message=task.query,
+                )
             if memory_command.handled:
                 metrics_registry.inc_counter(
                     "agent_memory_operation_total",
@@ -850,6 +1095,22 @@ class AgentRunner:
         verifier_result: Optional[VerifyResult] = None
         previous_backend_result: Optional[AgentBackendResult] = None
         for attempt in range(self.max_verification_retries + 1):
+            repair_backend = getattr(self.backend, "repair", None)
+            if attempt > 0 and not callable(repair_backend):
+                refusal = (
+                    "请求未执行：回答未通过证据校验，且当前后端不支持基于已有证据的"
+                    "定向修复。已停止重新执行完整任务，避免重复调用。"
+                )
+                state.mark_rejected("verification_repair_unavailable", refusal)
+                self._record_diagnostic(
+                    state,
+                    "verification_repair",
+                    "rejected",
+                    retry=attempt,
+                    failure_reason="targeted_repair_unavailable",
+                    verifier=verifier_result.__dict__ if verifier_result else {},
+                )
+                return self._result(state, refusal, verifier_result)
             budget_error = (
                 self._retry_preflight_reason(state, task)
                 if attempt > 0
@@ -875,20 +1136,44 @@ class AgentRunner:
                 return self._result(state, state.error or "budget exhausted", verifier_result)
             step = state.record_step(
                 step_type="backend",
-                name="execute_agent_backend",
+                name=(
+                    "repair_answer_from_verified_evidence"
+                    if attempt > 0
+                    else "execute_agent_backend"
+                ),
                 status="running",
-                metadata={"attempt": attempt},
+                metadata={
+                    "attempt": attempt,
+                    "strategy": "targeted_evidence_repair" if attempt > 0 else "initial",
+                },
             )
             model_reservation: Reservation | None = None
+            attempt_previous = previous_backend_result
             try:
                 if not self._backend_manages_budget():
                     model_reservation = self._reserve_backend_model_call(state, task.query)
                 self._publish_event(
                     task.request_id,
                     "model_started",
-                    {"attempt": attempt, "max_output_tokens": self.max_model_output_tokens},
+                    {
+                        "attempt": attempt,
+                        "max_output_tokens": self.max_model_output_tokens,
+                        "strategy": (
+                            "targeted_evidence_repair" if attempt > 0 else "initial"
+                        ),
+                    },
                 )
-                backend_result = self.backend(task, state)
+                if attempt > 0:
+                    assert attempt_previous is not None
+                    assert verifier_result is not None
+                    backend_result = repair_backend(
+                        task,
+                        state,
+                        attempt_previous,
+                        verifier_result,
+                    )
+                else:
+                    backend_result = self.backend(task, state)
             except BudgetExceeded as exc:
                 if model_reservation is not None:
                     state.budget.manager.release_model_call(model_reservation)
@@ -921,7 +1206,20 @@ class AgentRunner:
                 return self._result(state, f"请求未执行：{exc}")
 
             previous_backend_result = backend_result
+            prior_evidence_keys = {
+                (
+                    str(item.get("id") or item.get("source") or ""),
+                    str(item.get("content") or ""),
+                )
+                for item in (attempt_previous.evidence if attempt_previous else [])
+            }
             for item in backend_result.evidence:
+                evidence_key = (
+                    str(item.get("id") or item.get("source") or ""),
+                    str(item.get("content") or ""),
+                )
+                if evidence_key in prior_evidence_keys:
+                    continue
                 state.add_observation(
                     Observation(
                         source=str(item.get("id") or item.get("source") or "evidence"),
@@ -963,7 +1261,22 @@ class AgentRunner:
                     "remaining_tokens": state.budget.manager.remaining_tokens,
                 },
             )
+            prior_tool_keys = {
+                (
+                    str(item.get("tool") or ""),
+                    str(item.get("content") or ""),
+                    str(item.get("status") or ""),
+                )
+                for item in (attempt_previous.tool_results if attempt_previous else [])
+            }
             for tool_result in backend_result.tool_results:
+                tool_key = (
+                    str(tool_result.get("tool") or ""),
+                    str(tool_result.get("content") or ""),
+                    str(tool_result.get("status") or ""),
+                )
+                if tool_key in prior_tool_keys:
+                    continue
                 if tool_result.get("record_type") == "planner_step":
                     continue
                 tool_name = str(tool_result.get("tool", "unknown"))
@@ -1022,6 +1335,55 @@ class AgentRunner:
                 "verification_started",
                 {"attempt": attempt, "evidence_count": len(backend_result.evidence)},
             )
+            knowledge_gap = self._knowledge_gap_for_backend(task, backend_result)
+            if knowledge_gap is not None:
+                answer, gap_reason = knowledge_gap
+                verifier_result = VerifyResult(
+                    passed=True,
+                    action="pass",
+                    score=None,
+                    reasons=[gap_reason],
+                    judge={
+                        "status": "not_evaluated",
+                        "reason": "transparent_knowledge_gap",
+                    },
+                )
+                self._publish_event(
+                    task.request_id,
+                    "verification_completed",
+                    {
+                        "attempt": attempt,
+                        "passed": True,
+                        "action": "pass",
+                        "score": None,
+                        "reasons": [gap_reason],
+                        "citation_validity": 1.0,
+                        "citation_coverage": 1.0,
+                        "unsupported_claim_rate": 0.0,
+                        "harmful_instruction": False,
+                        "strategy": "knowledge_gap",
+                    },
+                )
+                self._record_diagnostic(
+                    state,
+                    "knowledge_gap",
+                    "completed",
+                    step_id=step.step_id,
+                    tool="rag_summarize",
+                    verifier=verifier_result.__dict__,
+                    retry=attempt,
+                )
+                self._publish_event(
+                    task.request_id,
+                    "execution_degraded",
+                    {
+                        "status": "completed",
+                        "reason": gap_reason,
+                        "strategy": "knowledge_gap",
+                    },
+                )
+                state.routing_feedback = {}
+                break
             verifier_result = self.verifier.verify(
                 query=task.query,
                 answer=answer,
@@ -1064,6 +1426,10 @@ class AgentRunner:
             if verifier_result.passed:
                 state.routing_feedback = {}
                 break
+            missing_knowledge_lookup = self._required_knowledge_lookup_missing(
+                backend_result,
+                verifier_result,
+            )
             fallback_answer = backend_result.safe_fallback_answer.strip()
             if fallback_answer and fallback_answer != answer:
                 fallback_verifier = self.verifier.verify(
@@ -1094,7 +1460,7 @@ class AgentRunner:
                             "unsupported_claim_rate": (
                                 fallback_verifier.unsupported_claim_rate
                             ),
-                            "strategy": "verified_evidence_excerpt",
+                            "strategy": backend_result.safe_fallback_strategy,
                         },
                     )
                     self._record_diagnostic(
@@ -1113,12 +1479,19 @@ class AgentRunner:
                         {
                             "status": "completed",
                             "reason": "generated_answer_verification_failed",
-                            "strategy": "verified_evidence_excerpt",
+                            "strategy": backend_result.safe_fallback_strategy,
                         },
                     )
                     break
-            if verifier_result.action != "retry" or attempt >= self.max_verification_retries:
-                refusal = "请求未执行：回答未通过证据校验，已拒绝输出可能不可靠的结论。"
+            if (
+                missing_knowledge_lookup
+                or verifier_result.action != "retry"
+                or attempt >= self.max_verification_retries
+            ):
+                refusal = self._verification_refusal_answer(
+                    task,
+                    missing_knowledge_lookup=missing_knowledge_lookup,
+                )
                 state.mark_rejected("verification_failed", refusal)
                 artifact = self._save_artifact(
                     state,
@@ -1440,15 +1813,21 @@ class AgentRunner:
         approval_id: Optional[str] = None,
     ) -> AgentRunResult:
         if self.conversation_memory is not None:
-            self.conversation_memory.commit_turn(
-                session_id=state.session_id,
+            with bind_budget_manager(state.budget.manager), bind_request_context(
                 request_id=state.request_id,
-                user_message=state.user_goal,
-                assistant_message=answer,
-                status=state.status,
+                session_id=state.session_id,
                 tenant_id=state.tenant_id,
-                user_id=state.user_id,
-            )
+            ):
+                self.conversation_memory.commit_turn(
+                    session_id=state.session_id,
+                    request_id=state.request_id,
+                    user_message=state.user_goal,
+                    assistant_message=answer,
+                    status=state.status,
+                    tenant_id=state.tenant_id,
+                    user_id=state.user_id,
+                )
+        public_evidence = _public_citation_evidence(state.observations, answer)
         result = AgentRunResult(
             state=state,
             answer=answer,
@@ -1456,6 +1835,7 @@ class AgentRunner:
             approval_id=approval_id or state.approval_id,
             artifacts=list(state.artifacts),
             verifier=verifier,
+            evidence=public_evidence,
         )
         event_type = (
             "run_completed"
@@ -1471,6 +1851,9 @@ class AgentRunner:
                 "approval_id": result.approval_id,
                 "artifacts": [artifact.__dict__ for artifact in result.artifacts],
                 "verifier": verifier.__dict__ if verifier else None,
+                "evidence": public_evidence,
+                "error": state.error,
+                "budget": state.budget.manager.snapshot(),
             },
         )
         return result
@@ -1595,18 +1978,9 @@ class AgentRunner:
         task: AgentTask,
     ) -> Optional[str]:
         manager = state.budget.manager
-        minimum_tokens = int(
-            os.getenv("AGENT_MIN_EXECUTION_TOKENS_AFTER_ROUTING", "900")
-        )
+        minimum_tokens = DEFAULT_MIN_REPAIR_TOKENS
         if manager.remaining_tokens < minimum_tokens:
             return "retry_token_budget_insufficient"
-        required_tools = (
-            task.routing_decision.required_tools
-            if task.routing_decision is not None
-            else ()
-        )
-        if required_tools and manager.remaining_tool_calls <= 0:
-            return "retry_tool_budget_insufficient"
         return None
 
     def _finish_budget_limited_retry(
@@ -1724,6 +2098,87 @@ class AgentRunner:
             else ()
         )
         return tuple(dict.fromkeys((*task.required_tools, *routed)))
+
+    @staticmethod
+    def _knowledge_gap_for_backend(
+        task: AgentTask,
+        backend_result: AgentBackendResult,
+    ) -> Optional[tuple[str, str]]:
+        """Translate a completed RAG lookup with no usable answer into a clear outcome."""
+
+        hard_reasons = {
+            "answer_empty",
+            "citation_invalid",
+            "citation_placeholder",
+            "claim_evidence_id_invalid",
+            "evidence_contradiction",
+            "harmful_instruction",
+        }
+        for item in reversed(backend_result.tool_results):
+            if str(item.get("tool") or item.get("name") or "") != "rag_summarize":
+                continue
+            metadata = item.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
+            verification = metadata.get("verification")
+            verification = verification if isinstance(verification, dict) else {}
+            reasons = {
+                str(reason)
+                for reason in verification.get("reasons") or ()
+            }
+            status = str(
+                metadata.get("business_status") or item.get("status") or ""
+            ).lower()
+            if status == "empty":
+                gap_reason = (
+                    "knowledge_irrelevant"
+                    if "retrieval_relevance_below_threshold" in reasons
+                    else "knowledge_no_results"
+                )
+                return knowledge_gap_answer(task.query, gap_reason), gap_reason
+            content = str(item.get("content") or "").strip()
+            if (
+                status == "verification_failed"
+                and not hard_reasons.intersection(reasons)
+                and (
+                    not content
+                    or content.startswith("请求未执行")
+                    or content.startswith("当前知识库")
+                )
+            ):
+                gap_reason = "evidence_insufficient_for_conclusion"
+                return knowledge_gap_answer(task.query, gap_reason), gap_reason
+            return None
+        return None
+
+    @staticmethod
+    def _required_knowledge_lookup_missing(
+        backend_result: AgentBackendResult,
+        verifier_result: VerifyResult,
+    ) -> bool:
+        if "rag_summarize" not in verifier_result.missing_required_tools:
+            return False
+        return not any(
+            str(item.get("tool") or item.get("name") or "") == "rag_summarize"
+            for item in backend_result.tool_results
+        )
+
+    @staticmethod
+    def _verification_refusal_answer(
+        task: AgentTask,
+        *,
+        missing_knowledge_lookup: bool,
+    ) -> str:
+        if missing_knowledge_lookup:
+            if re.search(r"最贵|价格|售价|价位|多少钱|报价", task.query):
+                return (
+                    "本次未能完成必要的知识库检索，因此暂时无法确认哪款机器人最贵。"
+                    "为避免猜测，我不会给出具体型号；请稍后重试，或提供候选型号及价格。"
+                )
+            return (
+                "本次未能完成必要的知识库检索，因此暂时无法给出可靠结论。"
+                "为避免猜测，我不会补充未经资料支持的内容，请稍后重试。"
+            )
+        return "请求未执行：回答未通过证据校验，已拒绝输出可能不可靠的结论。"
 
     def _backend_preflight_reason(self, state: AgentState, query: str) -> Optional[str]:
         manager = state.budget.manager

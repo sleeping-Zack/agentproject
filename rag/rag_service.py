@@ -1,18 +1,20 @@
 """
 总结服务类：用户提问，走 Hybrid 检索（Dense + BM25 + RRF + 可选 Rerank），把证据交给模型总结。
 """
+import os
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
+from agent.budget import BudgetManager, current_budget_manager
+from agent.budgeted_text_model import invoke_budgeted_call, model_response_text
 from agent.verifier import AnswerVerifier, build_default_answer_verifier
 from model.factory import chat_model, embed_model
 from observability.context import request_context
 from observability.metrics import metrics_registry
-from rag.rag_utils import format_citations
+from rag.rag_utils import format_citations, knowledge_gap_answer
 from rag.retrievers.bm25_retriever import BM25Retriever
 from rag.retrievers.dense_retriever import DenseRetriever
 from rag.retrievers.hybrid_retriever import HybridRetriever
@@ -64,6 +66,7 @@ class RagSummarizeService(object):
         enable_semantic_cache: bool = True,
         verifier: Optional[AnswerVerifier] = None,
         verify_generation: bool = True,
+        budget_manager: Optional[BudgetManager] = None,
     ):
         self.vector_store_service = VectorStoreService()
         self.vector_store = self.vector_store_service.vector_store  # 保留字段兼容旧测试
@@ -75,6 +78,11 @@ class RagSummarizeService(object):
         self.model = chat_model
         self.verifier = verifier or build_default_answer_verifier()
         self.verify_generation = verify_generation
+        self.budget_manager = budget_manager
+        self.max_output_tokens = max(
+            1,
+            int(os.getenv("AGENT_RAG_MAX_OUTPUT_TOKENS", "1600")),
+        )
         self._chain = None
         self._semantic_cache = None
         if enable_semantic_cache and embed_model is not None:
@@ -87,16 +95,24 @@ class RagSummarizeService(object):
             except Exception:
                 self._semantic_cache = None
 
-    def _init_chain(self):
+    def _init_chain(self, max_output_tokens: Optional[int] = None):
         model = self.model.resolve() if hasattr(self.model, "resolve") else self.model
-        chain = self.prompt_template | model | StrOutputParser()
+        output_limit = max_output_tokens or self.max_output_tokens
+        if hasattr(model, "bind"):
+            model = model.bind(max_tokens=max(1, int(output_limit)))
+        chain = self.prompt_template | model
         return chain
 
     @property
     def chain(self):
         if self._chain is None:
-            self._chain = self._init_chain()
+            self._chain = self._init_chain(self.max_output_tokens)
         return self._chain
+
+    def _generation_chain(self, max_output_tokens: int):
+        if self._chain is not None:
+            return self._chain
+        return self._init_chain(max_output_tokens=max_output_tokens)
 
     @property
     def hybrid_retriever(self) -> HybridRetriever:
@@ -203,6 +219,7 @@ class RagSummarizeService(object):
         prompt_version: Optional[str] = None,
         retrieval_version: Optional[str] = None,
         model_version: Optional[str] = None,
+        budget_manager: Optional[BudgetManager] = None,
     ) -> RagResult:
         cache_namespace = None
         if self._semantic_cache is not None:
@@ -261,13 +278,16 @@ class RagSummarizeService(object):
                 )
             )
             citations_structured.append(Citation(evidence_id=evidence_id, source=source))
-            context += f"【参考资料{counter}】: 参考资料：{doc.page_content} | 参考元数据：{doc.metadata}\n"
+            context += (
+                f"【参考资料{counter}｜证据ID:{evidence_id}】: "
+                f"参考资料：{doc.page_content} | 参考元数据：{doc.metadata}\n"
+            )
             safe_docs.append(doc)
 
         if not evidence or not retrieval_supported:
             reason = "evidence_required" if not evidence else "retrieval_relevance_below_threshold"
             result = RagResult(
-                answer="请求未执行：知识库中没有足够证据支持回答该问题。",
+                answer=knowledge_gap_answer(query, reason),
                 evidence=[],
                 citations=[],
                 business_status="empty",
@@ -283,16 +303,23 @@ class RagSummarizeService(object):
                 self._semantic_cache.set(query, deepcopy(result), namespace=cache_namespace)
             return result
 
-        citations = format_citations(safe_docs)
+        citations = format_citations(
+            safe_docs,
+            evidence_ids=[item.id for item in evidence],
+        )
         verification = None
         answer_with_citations = ""
+        generation_input = query
+        manager = self._resolve_budget_manager(budget_manager)
         max_attempts = 2 if getattr(self, "verify_generation", False) else 1
-        for _attempt in range(max_attempts):
-            answer = self.chain.invoke(
+        for attempt in range(max_attempts):
+            answer = self._generate(
                 {
-                    "input": query,
+                    "input": generation_input,
                     "context": context,
-                }
+                },
+                budget_manager=manager,
+                attempt=attempt,
             )
             answer_with_citations = (
                 f"{answer}\n\n引用来源：\n{citations}" if citations else answer
@@ -315,6 +342,12 @@ class RagSummarizeService(object):
             }
             if verified.passed:
                 break
+            if attempt + 1 < max_attempts:
+                generation_input = self._retry_input(
+                    query=query,
+                    previous_answer=answer_with_citations,
+                    verification=verification,
+                )
         if verification is not None and not verification["passed"]:
             reasons = list(verification.get("reasons") or [])
             unsupported_rate = float(verification.get("unsupported_claim_rate") or 0.0)
@@ -346,9 +379,73 @@ class RagSummarizeService(object):
             self._semantic_cache.set(query, deepcopy(result), namespace=cache_namespace)
         return result
 
-    def rag_summarize(self, query: str) -> str:
-        return self.rag_summarize_result(query).answer
+    def rag_summarize(
+        self,
+        query: str,
+        *,
+        budget_manager: Optional[BudgetManager] = None,
+    ) -> str:
+        return self.rag_summarize_result(
+            query,
+            budget_manager=budget_manager,
+        ).answer
 
+    def _resolve_budget_manager(
+        self,
+        budget_manager: Optional[BudgetManager],
+    ) -> Optional[BudgetManager]:
+        if budget_manager is not None:
+            return budget_manager
+        configured = getattr(self, "budget_manager", None)
+        return configured if configured is not None else current_budget_manager()
+
+    def _generate(
+        self,
+        payload: Dict[str, str],
+        *,
+        budget_manager: Optional[BudgetManager],
+        attempt: int,
+    ) -> str:
+        prompt = "\n".join(
+            (
+                str(getattr(self, "prompt_text", "")),
+                str(payload.get("input") or ""),
+                str(payload.get("context") or ""),
+            )
+        )
+        max_output_tokens = int(
+            getattr(
+                self,
+                "max_output_tokens",
+                os.getenv("AGENT_RAG_MAX_OUTPUT_TOKENS", "1600"),
+            )
+        )
+        response = invoke_budgeted_call(
+            lambda output_cap: self._generation_chain(output_cap).invoke(payload),
+            prompt,
+            max_output_tokens=max_output_tokens,
+            operation=f"rag-generation-{attempt + 1}",
+            budget_manager=budget_manager,
+            model_name=type(getattr(self, "model", None)).__name__,
+            retry=attempt,
+        )
+        return model_response_text(response)
+
+    @staticmethod
+    def _retry_input(
+        *,
+        query: str,
+        previous_answer: str,
+        verification: Dict[str, Any],
+    ) -> str:
+        reasons = ", ".join(str(item) for item in verification.get("reasons") or ())
+        return (
+            f"{query}\n\n"
+            "上一版答案未通过证据一致性校验。请只依据参考资料修订，不得重复原答案中"
+            "缺少证据的结论；保留有证据支持的内容并给出准确引用。\n"
+            f"上一版答案：\n{previous_answer}\n"
+            f"校验反馈：{reasons or verification.get('action') or 'verification_failed'}"
+        )
 
 if __name__ == '__main__':
     rag = RagSummarizeService()

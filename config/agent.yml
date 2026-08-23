@@ -7,6 +7,7 @@ answer_verifier:
   require_citation: true
   min_overall_score: 3.5
   min_faithfulness_score: 4.0
+  max_unsupported_claim_rate: 0.5
   llm_judge:
     # Explicitly enabled in production/online evaluation with
     # AGENT_LLM_JUDGE_ENABLED=true to keep deterministic CI free of model cost.

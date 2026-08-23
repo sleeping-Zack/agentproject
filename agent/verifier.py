@@ -21,6 +21,21 @@ _PLACEHOLDER_RE = re.compile(
     r"^(?:暂无|无|没有|无可用(?:来源|引用)?|none|n\s*/?\s*a|not\s+available)[。.!\s]*$",
     re.IGNORECASE,
 )
+_GREETING_RE = re.compile(
+    r"^(?:(?:你|您)好(?:呀|啊)?|大家好|hi|hello|hey(?:\s+there)?)[,，.!！。\s]*$",
+    re.IGNORECASE,
+)
+_ORGANISATIONAL_INTRO_RE = re.compile(
+    r"^(?:"
+    r"(?:建议|可以|可|请)?(?:先)?按(?:照)?(?:以下|下面)?(?:顺序|步骤)"
+    r"(?:进行)?(?:系统)?(?:排查|检查|处理)"
+    r"|(?:建议|可以|可)?从(?:以下|下面)(?:几个)?(?:方面|步骤)"
+    r"(?:进行)?(?:系统)?(?:排查|检查|分析)"
+    r"|(?:下面|以下)(?:是|为)?(?:系统)?(?:排查|检查|处理|分析)?"
+    r"(?:步骤|顺序|要点|建议|清单|内容)"
+    r"|(?:系统)?(?:排查|检查|处理|分析)(?:步骤|顺序|要点|建议|清单|内容)?"
+    r")(?:如下)?$"
+)
 _NEGATION_RE = re.compile(
     r"(?:严禁|禁止|切勿|不得|不能|不要|不应|避免|无需|不可|请勿|"
     r"must\s+not|do\s+not|don't|never|cannot|can't|should\s+not|shouldn't|"
@@ -120,15 +135,12 @@ class AnswerVerifier:
         min_overall_score: float = 3.5,
         require_citation: bool = True,
         min_faithfulness_score: float = 4.0,
-        max_unsupported_claim_rate: float = 0.9,
+        max_unsupported_claim_rate: float = 0.5,
     ) -> None:
         self.judge = judge
         self.min_overall_score = min_overall_score
         self.require_citation = require_citation
         self.min_faithfulness_score = min_faithfulness_score
-        # 综合/排查类回答会引用多条证据，弱语义支撑判断对这类题误伤率高（可达 ~0.8）。
-        # 真正可靠的接地信号是 citation_validity / citation_coverage（仍严格把关）；
-        # 故仅放宽不可靠的 unsupported_claim_rate 到 0.9——仅当几乎所有声明都无证据（≈1.0）才拒绝。
         self.max_unsupported_claim_rate = max_unsupported_claim_rate
 
     def verify(
@@ -169,6 +181,12 @@ class AnswerVerifier:
         rag_attempted = any(
             isinstance(item, Mapping)
             and str(item.get("tool") or item.get("name") or "") == "rag_summarize"
+            for item in tool_results
+        )
+        successful_rag_lineage = any(
+            isinstance(item, Mapping)
+            and str(item.get("tool") or item.get("name") or "") == "rag_summarize"
+            and str(item.get("status") or "").lower() == "success"
             for item in tool_results
         )
         rag_required = "rag_summarize" in required_tools
@@ -215,12 +233,23 @@ class AnswerVerifier:
         )
         if placeholder_citation:
             self._add_reason(reasons, "citation_placeholder")
-        if citation_required and not resolved_citations:
+        if citation_required and not citation_refs:
             self._add_reason(reasons, "citation_missing")
         if invalid_citations:
             self._add_reason(reasons, "citation_invalid")
-        if citation_required and citation_validity < 1.0:
+        if citation_required and citation_refs and citation_validity < 1.0:
             self._add_reason(reasons, "citation_validity_below_threshold")
+
+        # A successful RAG result establishes provenance for support scoring only.
+        # Citation metrics below still count explicit references from the final answer.
+        inherited_evidence_ids = (
+            list(evidence_by_id)
+            if successful_rag_lineage
+            and records
+            and not citation_refs
+            and not placeholder_citation
+            else []
+        )
 
         claims = self._claims_for_verification(
             answer=answer,
@@ -252,7 +281,14 @@ class AnswerVerifier:
                 ):
                     self._add_reason(reasons, "claim_citation_missing")
 
-                support = self._evaluate_claim(claim.text, resolved_ids, evidence_by_id)
+                evaluation_ids = resolved_ids
+                if not evaluation_ids and not claim.evidence_ids:
+                    evaluation_ids = inherited_evidence_ids
+                support = self._evaluate_claim(
+                    claim.text,
+                    evaluation_ids,
+                    evidence_by_id,
+                )
                 support_results.append(support)
                 if not support.supported:
                     unsupported_claims += 1
@@ -284,7 +320,7 @@ class AnswerVerifier:
             citation_coverage = 1.0
             unsupported_claim_rate = 0.0
 
-        if grounding_required and citation_coverage < 0.9:
+        if grounding_required and citation_refs and citation_coverage < 0.9:
             self._add_reason(reasons, "citation_coverage_below_threshold")
         if grounding_required and unsupported_claim_rate > self.max_unsupported_claim_rate:
             self._add_reason(reasons, "unsupported_claim_rate_exceeded")
@@ -570,6 +606,8 @@ class AnswerVerifier:
             raw = piece.strip()
             if not raw:
                 continue
+            if cls._is_non_factual_claim(raw):
+                continue
             refs = [match.group(0) for match in _NUMERIC_CITATION_RE.finditer(raw)]
             for record in records:
                 refs.extend(record.evidence_id for _ in cls._id_matches(raw, record.evidence_id))
@@ -580,6 +618,8 @@ class AnswerVerifier:
             claim_text = claim_text.strip("。.!！?？;；:：")
             if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", claim_text):
                 continue
+            if cls._is_non_factual_claim(claim_text):
+                continue
             claims.append(
                 AnswerClaim(
                     text=claim_text,
@@ -587,6 +627,19 @@ class AnswerVerifier:
                 )
             )
         return claims
+
+    @staticmethod
+    def _is_non_factual_claim(text: str) -> bool:
+        value = text.strip()
+        value = re.sub(r"^\s*#{1,6}\s*", "", value)
+        value = re.sub(r"^\s*(?:[-*#>]|\d+[.)、])\s*", "", value)
+        value = value.strip("*_`~ \t\r\n。.!！?？;；:：")
+        if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", value):
+            return True
+        return bool(
+            _GREETING_RE.fullmatch(value)
+            or _ORGANISATIONAL_INTRO_RE.fullmatch(value)
+        )
 
     @classmethod
     def _evaluate_claim(
@@ -602,9 +655,12 @@ class AnswerVerifier:
                 reason="claim_has_no_evidence",
             )
         candidate_sentences: List[str] = []
+        candidate_contents: List[str] = []
         for evidence_id in evidence_ids:
             record = evidence_by_id.get(evidence_id)
             if record is not None:
+                if record.content.strip():
+                    candidate_contents.append(record.content.strip())
                 candidate_sentences.extend(cls._split_sentences(record.content))
         if not candidate_sentences:
             return ClaimSupport(
@@ -621,6 +677,13 @@ class AnswerVerifier:
             if score > best_score:
                 best_score = score
                 best_sentence = sentence
+        combined_evidence = "\n".join(candidate_contents)
+        if combined_evidence:
+            # A single answer claim may legitimately synthesize several evidence lines.
+            combined_score = cls._lexical_support_score(claim, combined_evidence)
+            if combined_score > best_score:
+                best_score = combined_score
+                best_sentence = combined_evidence
         # Negation heuristics are only a hard refusal at very high lexical
         # alignment. Lower-confidence polarity differences are delegated to
         # the semantic judge to avoid false positives on paraphrases.
@@ -759,6 +822,7 @@ class AnswerVerifier:
             return "refuse"
         retry_reasons = {
             "required_tool_missing",
+            "citation_missing",
             "citation_coverage_below_threshold",
             "judge_faithfulness_below_threshold",
             "judge_score_below_threshold",
@@ -810,4 +874,7 @@ def build_default_answer_verifier(
         min_overall_score=float(config.get("min_overall_score", 3.5)),
         require_citation=bool(config.get("require_citation", True)),
         min_faithfulness_score=float(config.get("min_faithfulness_score", 4.0)),
+        max_unsupported_claim_rate=float(
+            config.get("max_unsupported_claim_rate", 0.5)
+        ),
     )

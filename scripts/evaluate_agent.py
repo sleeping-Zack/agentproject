@@ -535,8 +535,9 @@ def _compare_baseline(aggregate: Dict, latency: Dict, baseline_path: Optional[st
 
 
 def _summarize_cost(results: List[CaseResult]) -> Dict[str, Any]:
-    costs: List[float] = []
-    token_totals: List[int] = []
+    total_cost = 0.0
+    total_tokens = 0
+    has_usage = False
     for result in results:
         request_id = result.detail.get("request_id")
         if not request_id:
@@ -545,20 +546,32 @@ def _summarize_cost(results: List[CaseResult]) -> Dict[str, Any]:
             events = trace_recorder.export_trace(request_id)["events"]
         except KeyError:
             continue
-        for event in events:
+        model_usage_events = [
+            event
+            for event in events
+            if (event.get("metadata") or {}).get("type") == "model_usage"
+        ]
+        # Compatibility backends report usage on verifier diagnostics.  Use
+        # those only when no per-model events exist, otherwise the same model
+        # call would be counted twice.
+        usage_events = model_usage_events or [
+            event
+            for event in events
+            if (event.get("metadata") or {}).get("type") == "verifier"
+        ]
+        for event in usage_events:
             metadata = event.get("metadata", {})
             cost = float(metadata.get("cost") or 0.0)
             tokens = int(metadata.get("tokens_in") or 0) + int(metadata.get("tokens_out") or 0)
-            if cost > 0:
-                costs.append(cost)
-            if tokens > 0:
-                token_totals.append(tokens)
-    if not costs and not token_totals:
+            total_cost += cost
+            total_tokens += tokens
+            has_usage = has_usage or cost > 0 or tokens > 0
+    if not has_usage:
         return {"avg": 0.0, "mode": "disabled"}
     return {
-        "avg": round(sum(costs) / len(results), 6) if results else 0.0,
+        "avg": round(total_cost / len(results), 6) if results else 0.0,
         "mode": "estimated",
-        "tokens_avg": round(sum(token_totals) / len(results), 3) if results else 0.0,
+        "tokens_avg": round(total_tokens / len(results), 3) if results else 0.0,
     }
 
 

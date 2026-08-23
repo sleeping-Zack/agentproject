@@ -119,11 +119,15 @@ class ModelRouter:
 def build_default_router_from_config(rag_conf: Dict) -> ModelRouter:
     """从 rag.yml 主配置构造一个最小 router；额外 provider 可由调用方继续 register。"""
     router = ModelRouter()
+    max_retries = max(0, int(os.getenv("AGENT_MODEL_MAX_RETRIES", "2")))
     router.register(ProviderEntry(
         config=ProviderConfig(
             provider=os.getenv("MODEL_PROVIDER", rag_conf.get("model_provider", "tongyi")),
             model_name=os.getenv("CHAT_MODEL_NAME", rag_conf["chat_model_name"]),
-            extra={"temperature": float(rag_conf.get("model_temperature", 0.0))},
+            extra={
+                "temperature": float(rag_conf.get("model_temperature", 0.0)),
+                "max_retries": max_retries,
+            },
         ),
         scene=DEFAULT_SCENE,
         weight=10,
@@ -137,6 +141,7 @@ def build_default_router_from_config(rag_conf: Dict) -> ModelRouter:
                                         rag_conf["chat_model_name"]),
                 base_url=rag_conf.get("fallback_base_url"),
                 api_key_env=rag_conf.get("fallback_api_key_env"),
+                extra={"max_retries": max_retries},
             ),
             scene=DEFAULT_SCENE,
             weight=1,

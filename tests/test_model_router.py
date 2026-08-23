@@ -1,7 +1,12 @@
 import pytest
 
 from model.providers import ProviderConfig, build_model_provider
-from model.router import ModelRouter, ProviderEntry, NoAvailableModelError
+from model.router import (
+    ModelRouter,
+    NoAvailableModelError,
+    ProviderEntry,
+    build_default_router_from_config,
+)
 
 
 def _mock_entry(name: str = "mock-1") -> ProviderEntry:
@@ -78,3 +83,17 @@ def test_router_filters_by_tenant():
 
     chosen = router.select(tenant_id="other")
     assert chosen.config.model_name == "public"
+
+
+def test_default_router_bounds_provider_internal_retries(monkeypatch):
+    monkeypatch.setenv("AGENT_MODEL_MAX_RETRIES", "2")
+
+    router = build_default_router_from_config(
+        {
+            "model_provider": "tongyi",
+            "chat_model_name": "qwen-test",
+            "model_temperature": 0,
+        }
+    )
+
+    assert router.list_entries()[0].config.extra["max_retries"] == 2

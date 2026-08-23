@@ -1,4 +1,8 @@
+from types import SimpleNamespace
+
+import agent.tools.middleware as middleware_module
 from agent.budget import BudgetManager
+from agent.tools.retry import RetryPolicy
 from langchain_core.messages import ToolMessage
 
 from agent.tools.middleware import (
@@ -7,6 +11,7 @@ from agent.tools.middleware import (
     _record_rag_outcome,
     _run_with_timeout,
     _tool_result_event_payload,
+    monitor_tool,
 )
 from observability.context import bind_request_context, request_context
 
@@ -36,6 +41,48 @@ def test_tool_budget_increments_before_allowed_call():
 
     assert result is None
     assert runtime_context["used_tool_calls"] == 2
+
+
+def test_monitor_tool_retries_consume_one_logical_tool_call(monkeypatch):
+    monkeypatch.setattr(
+        middleware_module,
+        "default_retry_policy",
+        RetryPolicy(max_attempts=3, base_delay=0, max_delay=0, jitter=0),
+    )
+    manager = BudgetManager(max_tool_calls=3)
+    request = SimpleNamespace(
+        tool_call={
+            "id": "retry-budget-call",
+            "name": "get_weather",
+            "args": {"city": "retry-budget-test-city"},
+        },
+        runtime=SimpleNamespace(
+            context={
+                "budget_manager": manager,
+                "tenant_id": "default",
+                "user_role": "user",
+                "scene": "default",
+            }
+        ),
+    )
+    attempts = 0
+
+    def handler(_request):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise RuntimeError("temporary transport failure")
+        return ToolMessage(
+            content="success",
+            tool_call_id="retry-budget-call",
+            name="get_weather",
+        )
+
+    result = monitor_tool.wrap_tool_call(request, handler)
+
+    assert result.content == "success"
+    assert attempts == 3
+    assert manager.snapshot()["used_tool_calls"] == 1
 
 
 def test_rag_guard_allows_distinct_gap_driven_retrievals():

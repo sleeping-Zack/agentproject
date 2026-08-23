@@ -72,6 +72,20 @@ def test_model_middleware_cache_hit_does_not_charge_tokens():
     assert snapshot["model_cache_hits"] == 1
 
 
+def test_model_middleware_provider_error_charges_prompt_not_max_output():
+    manager = BudgetManager(max_tokens=100)
+
+    def handler(request):
+        raise RuntimeError("provider unavailable")
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        enforce_model_budget.wrap_model_call(_request(manager), handler)
+
+    snapshot = manager.snapshot()
+    assert snapshot["used_tokens"] == 2
+    assert snapshot["reserved_tokens"] == 0
+
+
 def test_message_token_estimate_accounts_for_cjk_characters():
     chinese = _estimate_message_tokens([HumanMessage(content="扫" * 100)])
     ascii_text = _estimate_message_tokens([HumanMessage(content="a" * 100)])

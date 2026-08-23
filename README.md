@@ -38,6 +38,25 @@ Copy-Item .env.example .env
 
 在 `.env` 中配置 `DASHSCOPE_API_KEY`。
 
+默认的单次执行预算在本地环境和 Docker Compose 中保持一致：
+
+| 环境变量 | 默认值 | 含义 |
+|---|---:|---|
+| `AGENT_MAX_RUN_TOKENS` | `32000` | 单次运行的 Token 总预算 |
+| `AGENT_MAX_MODEL_OUTPUT_TOKENS` | `2000` | 单次模型调用的最大输出 Token |
+| `AGENT_MODEL_MAX_RETRIES` | `2` | 模型供应商调用失败后的最大内部重试次数 |
+| `AGENT_MAX_TOOL_CALLS` | `8` | 单次运行允许的逻辑工具调用数 |
+| `AGENT_MAX_STEPS` | `8` | 单次运行允许的执行步骤数 |
+| `AGENT_MAX_COST` | `1.0` | 单次运行允许的费用上限 |
+| `AGENT_MAX_VERIFICATION_RETRIES` | `1` | 回答校验失败后的定向修复次数 |
+| `AGENT_MIN_REPAIR_TOKENS` | `4500` | 启动定向修复前至少保留的 Token |
+| `AGENT_RAG_MAX_OUTPUT_TOKENS` | `1600` | 单次 RAG 生成的最大输出 Token |
+| `AGENT_MAX_REACT_RECURSION` | `12` | ReAct 图的最大递归步数，防止无界循环 |
+| `AGENT_MEMORY_EXTRACTION_MAX_TOKENS` | `900` | 单次长期记忆提取的最大输出 Token |
+| `AGENT_SUMMARY_MAX_TOKENS` | `500` | 单次会话摘要的最大输出 Token |
+
+修改这些值后需重启服务。工具内部对同一逻辑调用的物理重试不应重复占用逻辑工具额度。
+
 加载知识库：
 
 ```powershell

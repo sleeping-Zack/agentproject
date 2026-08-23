@@ -4,6 +4,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextlib import nullcontext
 from contextvars import copy_context
 from difflib import SequenceMatcher
 from typing import Any, Callable
@@ -23,7 +24,11 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command
 from utils.logger_handler import logger
 from utils.config_handler import agent_conf
-from agent.budget import BudgetExceeded, BudgetManager, Reservation
+from agent.budget import (
+    BudgetExceeded,
+    BudgetManager,
+    bind_budget_manager,
+)
 from agent.policies import PolicyAction, ToolPolicy
 from agent.tools.registry import build_default_tool_registry
 from agent.tools.retry import RetryPolicy, run_with_retry
@@ -186,12 +191,12 @@ def monitor_tool(
         return duplicate_rag
 
     def _invoke():
-        reservation: Reservation | None = None
-        if budget_manager is not None:
-            # This function is called once per retry attempt.  Committing in
-            # ``finally`` means failed attempts consume a call slot too.
-            reservation = budget_manager.reserve_tool_call(tool_name)
-        try:
+        budget_context = (
+            bind_budget_manager(budget_manager)
+            if budget_manager is not None
+            else nullcontext()
+        )
+        with budget_context:
             if request_id:
                 with trace_recorder.span(
                         request_id,
@@ -211,9 +216,6 @@ def monitor_tool(
                         )
                     return result
             return _invoke_handler_with_approval(tool_name, request, handler)
-        finally:
-            if reservation is not None:
-                budget_manager.commit_tool_call(reservation)
 
     def _on_retry(attempt: int, exc: BaseException, wait: float) -> None:
         metrics_registry.inc_tool_call(tool_name, status="retry")
@@ -252,7 +254,12 @@ def monitor_tool(
         )
         return cached
 
+    tool_reservation = None
     try:
+        if budget_manager is not None:
+            # A logical tool request consumes one slot; transport retries are
+            # implementation details and must not multiply the tool budget.
+            tool_reservation = budget_manager.reserve_tool_call(tool_name)
         result = _run_with_timeout(
             lambda: run_with_retry(_invoke, policy=default_retry_policy, on_retry=_on_retry),
             timeout_seconds=_timeout_seconds(tool_name),
@@ -345,8 +352,11 @@ def monitor_tool(
         return ToolMessage(
             content=f"工具调用失败：{exc}。请向用户说明无法获取该数据或换一种方式。",
             tool_call_id=request.tool_call.get("id", ""),
-        name=tool_name,
-    )
+            name=tool_name,
+        )
+    finally:
+        if tool_reservation is not None:
+            budget_manager.commit_tool_call(tool_reservation)
 
 
 def _enforce_tool_budget(
@@ -745,8 +755,14 @@ def enforce_model_budget(request: ModelRequest, handler: Callable):
     try:
         response = handler(bounded_request)
     except BaseException:
-        # The provider was invoked, so a retry must not get a free attempt.
-        manager.commit_model_call(reservation)
+        # Without provider usage metadata, charge the known prompt rather than
+        # the entire maximum output reservation.
+        input_cost = round((estimated_input / 1000.0) * cost_per_1k, 6)
+        manager.commit_model_call(
+            reservation,
+            actual_tokens=estimated_input,
+            actual_cost=input_cost,
+        )
         raise
 
     cache_hit = _is_model_cache_hit(response)

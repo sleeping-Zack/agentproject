@@ -6,14 +6,43 @@ usage or release the reservation when no call was made.
 """
 from __future__ import annotations
 
+import os
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import RLock
-from typing import Callable, Literal, Optional
+from typing import Callable, Iterator, Literal, Optional
 from uuid import uuid4
+
+from dotenv import load_dotenv
+from utils.path_tool import get_abs_path
+
+
+load_dotenv(get_abs_path(".env"))
 
 
 ReservationKind = Literal["model", "tool"]
+
+
+DEFAULT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "8"))
+DEFAULT_MAX_TOOL_CALLS = int(os.getenv("AGENT_MAX_TOOL_CALLS", "8"))
+DEFAULT_MAX_TOKENS = int(os.getenv("AGENT_MAX_RUN_TOKENS", "32000"))
+DEFAULT_MAX_RUN_TOKENS = DEFAULT_MAX_TOKENS
+DEFAULT_MAX_COST = float(os.getenv("AGENT_MAX_COST", "1.0"))
+DEFAULT_MAX_MODEL_OUTPUT_TOKENS = int(
+    os.getenv("AGENT_MAX_MODEL_OUTPUT_TOKENS", "2000")
+)
+DEFAULT_MAX_VERIFICATION_RETRIES = int(
+    os.getenv("AGENT_MAX_VERIFICATION_RETRIES", "1")
+)
+DEFAULT_MIN_REPAIR_TOKENS = int(os.getenv("AGENT_MIN_REPAIR_TOKENS", "4500"))
+
+
+_CURRENT_BUDGET_MANAGER: ContextVar[Optional["BudgetManager"]] = ContextVar(
+    "current_budget_manager",
+    default=None,
+)
 
 
 class BudgetExceeded(ValueError):
@@ -55,10 +84,10 @@ class BudgetManager:
     def __init__(
         self,
         *,
-        max_steps: int = 8,
-        max_tool_calls: int = 5,
-        max_tokens: int = 8000,
-        max_cost: float = 1.0,
+        max_steps: int = DEFAULT_MAX_STEPS,
+        max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        max_cost: float = DEFAULT_MAX_COST,
         deadline: Optional[float] = None,
         deadline_seconds: Optional[float] = None,
         max_duration_seconds: Optional[float] = None,
@@ -437,3 +466,20 @@ class BudgetManager:
             )
         else:
             self._reserved_tool_calls -= 1
+
+
+def current_budget_manager() -> Optional[BudgetManager]:
+    """Return the request budget visible to nested model-backed operations."""
+
+    return _CURRENT_BUDGET_MANAGER.get()
+
+
+@contextmanager
+def bind_budget_manager(manager: BudgetManager) -> Iterator[None]:
+    """Expose a request budget to nested calls without adding plumbing everywhere."""
+
+    token = _CURRENT_BUDGET_MANAGER.set(manager)
+    try:
+        yield
+    finally:
+        _CURRENT_BUDGET_MANAGER.reset(token)

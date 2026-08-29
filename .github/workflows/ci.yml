@@ -62,10 +62,8 @@ jobs:
           --baseline evals/baselines/retrieval_baseline_v1.json
           --gate
           --gate-strategy hybrid
-          --min-recall 0.90
-          --min-precision 0.15
-          --min-mrr 0.90
-          --min-ndcg 0.90
+          --gate-config config/ci_quality_gates.yml
+          --gate-profile offline_fixture
           --report reports/retrieval-offline.json
       - name: Offline generation grounding regression
         run: >-
@@ -73,12 +71,8 @@ jobs:
           --golden evals/generation_golden.jsonl
           --baseline evals/baselines/generation_baseline_v1.json
           --gate
-          --min-pass-rate 1.0
-          --min-refusal-accuracy 1.0
-          --min-fact-coverage 1.0
-          --min-citation-validity 1.0
-          --max-forbidden-hit-rate 0.0
-          --max-unsupported-claim-rate 0.05
+          --gate-config config/ci_quality_gates.yml
+          --gate-profile offline_fixture
           --report reports/generation-offline.json
       - name: Offline agent regression (62 cases)
         env:
@@ -90,11 +84,11 @@ jobs:
           --offline
           --baseline evals/baselines/agent_baseline_v1.json
           --gate
-          --min-pass-rate 0.90
-          --min-tool-recall 0.85
-          --min-keyword-recall 0.80
-          --min-parameter-accuracy 0.90
-          --min-citation-validity 0.90
-          --min-case-count 60
-          --max-p95-latency-ms 2000
+          --gate-config config/ci_quality_gates.yml
+          --gate-profile offline_fixture
           --report reports/agent-offline.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: offline-quality-gate-reports
+          path: reports/*-offline.json

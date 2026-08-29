@@ -8,6 +8,10 @@ from services.persistence import SQLiteStore
 from services.memory_store import PostgresMemoryStore, SQLiteMemoryStore
 from services.human_eval_store import SQLiteHumanEvalStore
 from services.evaluation_analysis_store import SQLiteEvaluationAnalysisStore
+from services.postgres_evaluation import (
+    PostgresEvaluationAnalysisStore,
+    PostgresHumanEvalStore,
+)
 from services.postgres import (
     PostgresApprovalStore,
     PostgresArtifactStore,
@@ -25,7 +29,7 @@ def _backend(name: str, default: str = "sqlite") -> str:
 def _database_url() -> str:
     return os.getenv(
         "AGENT_DATABASE_URL",
-        "postgresql://agent:agent@127.0.0.1:5432/agent",
+        "postgresql://agent:agent@127.0.0.1:55432/agent",
     )
 
 
@@ -72,12 +76,18 @@ def create_artifact_store():
 
 
 def create_human_eval_store():
+    default = os.getenv("AGENT_STORAGE_BACKEND", "sqlite")
+    if _backend("AGENT_HUMAN_EVAL_BACKEND", default) == "postgres":
+        return PostgresHumanEvalStore(_database_url())
     return SQLiteHumanEvalStore(
         os.getenv("AGENT_HUMAN_EVAL_DB_PATH", "storage/human_eval.db")
     )
 
 
 def create_evaluation_analysis_store():
+    default = os.getenv("AGENT_STORAGE_BACKEND", "sqlite")
+    if _backend("AGENT_EVALUATION_ANALYSIS_BACKEND", default) == "postgres":
+        return PostgresEvaluationAnalysisStore(_database_url())
     return SQLiteEvaluationAnalysisStore(
         os.getenv(
             "AGENT_EVALUATION_ANALYSIS_DB_PATH",

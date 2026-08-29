@@ -28,5 +28,5 @@ python -m ruff check .
 python scripts/validate_retrieval_manifest.py
 python scripts/evaluate_retrieval.py --fixture evals/fixtures/retrieval_rankings_v1.json --baseline evals/baselines/retrieval_baseline_v1.json --gate --gate-strategy hybrid
 python scripts/evaluate_generation.py --baseline evals/baselines/generation_baseline_v1.json --gate --max-unsupported-claim-rate 0.05
-python scripts/evaluate_agent.py --golden evals/agent_offline_golden.jsonl --mode harness --offline --baseline evals/baselines/agent_baseline_v1.json --gate --min-case-count 60
+python scripts/evaluate_agent.py --golden evals/agent_offline_golden.jsonl --mode harness --offline --baseline evals/baselines/agent_baseline_v1.json --gate --gate-profile offline_fixture
 ```

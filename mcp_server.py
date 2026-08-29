@@ -15,7 +15,15 @@ def build_server() -> MCPToolServer:
     registry = build_default_tool_registry(agent_conf.get("allowed_tools", []))
     return MCPToolServer(
         tool_handlers={
-            "rag_summarize": lambda args: rag_summarize.invoke({"query": args["query"]}),
+            "rag_summarize": lambda args: rag_summarize.invoke(
+                {
+                    "query": args["query"],
+                    "information_gap": args.get(
+                        "information_gap",
+                        "外部调用需要知识库证据",
+                    ),
+                }
+            ),
             "get_weather": lambda args: get_weather.invoke({"city": args["city"]}),
             "fetch_external_data": lambda args: fetch_external_data.invoke(
                 {"user_id": args["user_id"], "month": args["month"]}

@@ -1,6 +1,6 @@
 # 面向智能硬件客服场景的可治理 Agent 平台
 
-这是一个面向扫地 / 扫拖机器人的 **RAG + 多工具 Agent + Harness 控制层** 项目。项目不仅覆盖知识库问答、天气 / 环境适配、用户设备使用记录查询、个性化报告生成，也把 Agent 应用生产化中常见的控制问题纳入架构：统一状态、预算停止、动态工具策略、真实人工审批、答案验证、artifact 留存、诊断 trace、评测门禁和服务化交付。
+这是一个面向扫地 / 扫拖机器人的 **RAG + 多工具 Agent + Harness 控制层** 项目。项目不仅覆盖知识库问答、天气 / 环境适配、用户设备使用记录查询、型号级故障码与产品规格查询、个性化报告生成和售后工单创建，也把 Agent 应用生产化中常见的控制问题纳入架构：统一状态、预算停止、动态工具策略、真实人工审批、答案验证、artifact 留存、诊断 trace、评测门禁和服务化交付。
 
 一句话概括：
 
@@ -11,16 +11,18 @@
 ## 1. 功能概览
 
 - **RAG 知识库**：从 `data/` 中的 PDF / TXT 构建 Chroma 向量库，以真实 Dense 分数和中文 BM25 双路召回，经 RRF 融合及可选 Cross-Encoder 精排后生成 evidence 与引用。
-- **多工具 Agent**：支持知识库检索、天气、用户位置、用户 ID、当前月份、使用记录查询和报告上下文切换。
+- **多工具 Agent**：支持知识库检索、天气、用户上下文、使用记录、型号级故障码、产品规格、报告上下文和售后工单创建。
 - **Harness 控制层**：统一 `AgentRunner` / `AgentState`，支持预算停止、动态工具策略、真实审批、答案验证、artifact 存储和诊断 trace。
 - **动态工具治理**：`ToolRegistry` 管工具元数据，`ToolPolicy` 从版本化 YAML 加载 tenant / role / scene / tool / args 规则，输出可审计决策；默认配置已包含 tenant A/B 的功能权限差异。
-- **真实 HITL 审批**：敏感工具如 `fetch_external_data` 会进入 `SQLiteApprovalStore`，普通用户需审批，operator / admin 可审批。
+- **真实 HITL 审批**：受保护的数据访问和售后工单写入会进入 `SQLiteApprovalStore`；`create_support_ticket` 仅在用户明确请求且人工审批通过后执行。
 - **答案质量闸门**：`AnswerVerifier` 依次执行结构校验、Claim-Evidence 对齐与危险结论检测，仅在高风险或低置信时选择性调用带超时、显式错误和 fail-closed 语义的 `LLMJudge`；直接 RAG 和 AgentRunner 共用该闸门。
 - **产物留存**：`SQLiteArtifactStore` 按 request_id 保存 final answer、verification failure、evidence、tool results 等运行产物。
 - **服务化入口**：FastAPI 暴露 `/chat`、`/chat/stream`、`/harness/run`、审批、artifact、MCP、trace、metrics、judge 等接口。
 - **MCP 工具服务**：支持 JSON-RPC `initialize`、`tools/list`、`tools/call`；MCP 工具调用同样经过 ToolPolicy 和审批存储。
 - **可观测性**：包含 request/tool/model trace、diagnostic event、OpenTelemetry 风格 span、Prometheus 指标，以及带序号、心跳、背压和断线重放的实时 SSE 事件流。
 - **评测门禁**：PR 运行 30 条冻结真实检索排名、12 条生成 grounding 正反例和 62 条离线 Agent golden，校验固定阈值及相对基线退化；真实 Rerank、生成与 Judge 评测由独立工作流定期执行。
+
+> 数据边界：内置的 `DemoBot S10 / S20 / X30` 规格与故障码目录是 `demo-v1` 确定性演示数据，不代表任何真实品牌或厂商官方资料。未收录型号或故障码时，Agent 应追问或说明边界，不得猜测和跨型号套用。
 
 ---
 
@@ -32,7 +34,7 @@
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
-pip install -e ".[dev]"
+pip install -e ".[dev,production]"
 Copy-Item .env.example .env
 ```
 
@@ -144,7 +146,7 @@ python mcp_server.py
 - `/harness/run` 是推荐的生产控制入口。
 - `/chat` 保留兼容旧调用方，但内部已经调用 `AgentRunner`，不会绕过审批、artifact、trace 和 verifier。
 - `/chat/stream` 统一输出 `AgentEvent`；客户端可携带同一 `request_id` 与 `Last-Event-ID` 恢复遗漏事件，跨租户、跨会话或不同 query 复用 request_id 会被拒绝。
-- `/mcp tools/call` 由 `MCPToolServer` 执行 ToolPolicy；调用 `fetch_external_data` 等敏感工具时会返回 `pending_approval` 和 `approval_id`，审批通过且参数匹配后才执行。
+- `/mcp tools/call` 由 `MCPToolServer` 执行 ToolPolicy；调用 `fetch_external_data`、`create_support_ticket` 等受控工具时会返回 `pending_approval` 和 `approval_id`，审批通过且参数匹配后才执行。
 - `tenant_id / user_id / role` 由 API Key 或 JWT 的服务端 claims 决定。前端不发送可伪造的身份请求头，也不提供客户端角色提权。
 - `principal_id` 是登录主体，`data_user_id` 是该主体拥有的使用记录标识。本人单月只读报告免审；跨用户报告进入审批，并把申请人、目标用户和月份绑定到审批记录。
 - `/chat`、`/chat/stream` 和 `/harness/run` 都接受 `approval_id`。批准后必须由原申请身份以相同参数继续请求；跨身份或改参数复用审批会被拒绝。
@@ -442,6 +444,7 @@ flowchart TB
 | 工具 | scope | risk_level | side_effect | requires_approval |
 |---|---|---|---|---|
 | `fetch_external_data` | `usage_record:read` | `medium` | `read_sensitive` | `true` |
+| `create_support_ticket` | `support_ticket:write` | `high` | `write` | `true` |
 
 审批接口：
 
@@ -456,6 +459,7 @@ POST /approvals/{approval_id}/deny
 - 只能查询当前 tenant 下的审批记录。
 - approve / deny 需要 `operator` 或 `admin`。
 - 审批通过后，Runner 和 Tool Middleware 都会校验 `tenant_id` 与 `tool_name` 是否匹配。
+- 售后工单只有在用户明确要求创建且审批通过后才会写入；审批记录绑定原始型号、问题类型、描述和可选故障码。
 
 ---
 
@@ -839,12 +843,12 @@ python -m ruff check .
 python -m scripts.evaluate_retrieval --fixture evals/fixtures/retrieval_rankings_v1.json --baseline evals/baselines/retrieval_baseline_v1.json --gate
 $env:AGENT_RERANK_STRATEGY="weighted_rrf"; python -m scripts.evaluate_retrieval --enable-reranker --candidate-k 20 --report reports/retrieval-rerank-online.json
 python -m scripts.evaluate_generation --baseline evals/baselines/generation_baseline_v1.json --gate
-python -m scripts.evaluate_agent --golden evals/agent_offline_golden.jsonl --mode harness --offline --baseline evals/baselines/agent_baseline_v1.json --gate --min-case-count 60
+python -m scripts.evaluate_agent --golden evals/agent_offline_golden.jsonl --mode harness --offline --baseline evals/baselines/agent_baseline_v1.json --gate --gate-profile offline_fixture
 python -m scripts.analyze_evaluation_experiment --baseline reports/baseline.json --candidate reports/candidate.json --experiment-id exp-routing-v2 --mode promotion --hypothesis "routing-v2 is non-inferior" --change "router-v1 -> router-v2" --baseline-approval reports/baseline-approval.json --output reports/exp-routing-v2.json --markdown reports/exp-routing-v2.md --gate
-python -m scripts.benchmark_api --url http://127.0.0.1:8000/chat --api-key dev-api-key
+python -m scripts.benchmark_api --url http://127.0.0.1:8000/chat/stream --profile staging --gate
 ```
 
-PR 门禁同时检查检索 Recall / Precision / MRR / nDCG，生成事实覆盖、禁止事实、引用、知识库外拒答，以及 Agent pass rate、工具与参数准确率、artifact、P95 延迟和相对基线退化；在线工作流再补充真实模型、真实 embedding、Cross-Encoder 和选择性 Judge 报告。
+PR 门禁同时检查检索 Recall / Precision / MRR / nDCG，生成软质量与高风险硬约束，以及 Agent 的适用样本分母、风险分层、分桶覆盖、Mock Harness 控制面耗时和相对基线退化。部署环境性能由独立工作流检查并发、成功 QPS、首 Token、完整响应 P95/P99、超时率以及模型/工具阶段耗时。完整阈值和解释见 [`docs/ci_quality_gates.md`](docs/ci_quality_gates.md)。
 
 九项原始 P0 / P1 的实现映射、实测指标和最终验收命令见 [`docs/p0_p1_completion.md`](docs/p0_p1_completion.md)。
 
@@ -925,7 +929,7 @@ flowchart LR
 | `observability/` | trace、diagnostic event、metrics、事件总线、请求上下文 |
 | `mcp_adapter/` | MCP JSON-RPC 适配层 |
 | `config/` | Agent、RAG、Chroma、Prompt 配置 |
-| `data/` | 知识库文件和外部使用记录数据 |
+| `data/` | 知识库文件、外部使用记录，以及 Demo 产品规格和型号级故障码数据 |
 | `docs/` | demo 说明、面试讲稿、Harness 讲稿和架构说明 |
 | `tests/` | 单元测试、Prompt 回归、安全、MCP、RAG、Harness 测试 |
 | `evals/` | RAG / Agent golden set 评测数据 |
@@ -972,7 +976,7 @@ docker run --env-file .env -p 8000:8000 sweeper-agent
 
 多实例演进已经落地，同时保留本地轻量模式：
 
-- 持久化通过 `AGENT_STORAGE_BACKEND` 切换 SQLite / Postgres；session、trace、approval 和 artifact 在 Postgres 中由所有实例共享。
+- 持久化通过 `AGENT_STORAGE_BACKEND` 切换 SQLite / Postgres；会话、trace、长期记忆、审批、产物、人工评测和评测分析都可由 Postgres 共享。
 - approval 与 artifact 按 request 维度幂等；审批状态只允许从 `pending` 原子转换一次，避免两个实例同时覆盖审批结果。
 - `AGENT_EVENT_BUS_BACKEND=redis` 启用 Redis Streams，跨实例共享生产者归属、严格递增序号、SSE replay、关闭和取消状态。
 - 限流和工具调用缓存可分别通过 `AGENT_RATE_LIMIT_BACKEND=redis` 与 `AGENT_CACHE_BACKEND=redis` 共享。
@@ -986,11 +990,20 @@ docker compose up --build
 
 服务地址：API `http://127.0.0.1:8000`，Jaeger UI `http://127.0.0.1:16686`。Compose 同时启动 Postgres、Redis、OpenTelemetry Collector 和 Jaeger，配置见 `docker-compose.yml` 与 `deploy/otel-collector.yaml`。
 
+从本地 SQLite 切换时，先启动依赖，再执行可重复运行的迁移命令。该命令会逐表校验，且不会删除 SQLite 源文件：
+
+```powershell
+docker compose up -d postgres redis
+python -m scripts.migrate_sqlite_to_postgres
+```
+
+本地 Docker PostgreSQL 默认映射到 `127.0.0.1:55432`，避免与系统 PostgreSQL 的标准端口冲突；容器网络内仍使用 `postgres:5432`。
+
 仅运行分布式后端集成测试时：
 
 ```powershell
 docker compose up -d postgres redis
-$env:AGENT_TEST_POSTGRES_URL="postgresql://agent:agent@127.0.0.1:5432/agent"
+$env:AGENT_TEST_POSTGRES_URL="postgresql://agent:agent@127.0.0.1:55432/agent"
 $env:AGENT_TEST_REDIS_URL="redis://127.0.0.1:6379/0"
 pytest tests/test_distributed_backends.py -q
 ```

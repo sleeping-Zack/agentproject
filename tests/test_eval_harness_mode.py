@@ -25,5 +25,10 @@ def test_ci_runs_full_offline_harness_gate():
     assert "--offline" in workflow
     assert "--golden evals/agent_offline_golden.jsonl" in workflow
     assert "--baseline evals/baselines/agent_baseline_v1.json" in workflow
-    assert "--min-case-count 60" in workflow
+    assert "--gate-config config/ci_quality_gates.yml" in workflow
+    assert "--gate-profile offline_fixture" in workflow
+    assert "--min-tool-recall 0.85" not in workflow
+    assert "AGENT_TEST_POSTGRES_URL" in workflow
+    assert "AGENT_TEST_REDIS_URL" in workflow
+    assert 'pip install -e ".[dev,production]"' in workflow
     assert "--smoke" not in workflow

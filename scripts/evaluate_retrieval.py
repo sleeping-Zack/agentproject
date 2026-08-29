@@ -15,6 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+from utils.evaluation_gate_config import (
+    DEFAULT_GATE_CONFIG,
+    load_gate_profile,
+    policy_value,
+)
+
 
 METRIC_NAMES = ("recall_at_k", "precision_at_k", "mrr", "ndcg_at_k", "hit_rate")
 
@@ -317,6 +323,57 @@ def compare_baseline(
     return {"passed": not failures, "deltas": deltas, "failures": failures}
 
 
+def evaluate_retrieval_gate(
+    report: Mapping[str, Mapping[str, Any]],
+    *,
+    strategy_name: str,
+    policy: Mapping[str, Any],
+    baseline_result: Optional[Mapping[str, Any]],
+    overrides: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Evaluate absolute, sample-size and baseline requirements for one strategy."""
+    selected = report.get(strategy_name)
+    if selected is None:
+        raise ValueError(f"gate strategy {strategy_name!r} was not evaluated")
+    overrides = dict(overrides or {})
+
+    def threshold(metric: str, fallback: float) -> float:
+        override = overrides.get(metric)
+        if override is not None:
+            return float(override)
+        return float(policy_value(policy, f"metrics.{metric}.minimum", fallback))
+
+    minimums = {
+        "recall_at_k": threshold("recall_at_k", 0.6),
+        "precision_at_k": threshold("precision_at_k", 0.1),
+        "mrr": threshold("mrr", 0.5),
+        "ndcg_at_k": threshold("ndcg_at_k", 0.5),
+        "hit_rate": threshold("hit_rate", 0.0),
+    }
+    minimum_case_count = int(
+        overrides.get("case_count")
+        if overrides.get("case_count") is not None
+        else policy.get("minimum_case_count", 1)
+    )
+    failures = []
+    if int(selected.get("case_count", 0)) < minimum_case_count:
+        failures.append("case_count_below_threshold")
+    for metric, minimum in minimums.items():
+        if float(selected.get(metric, 0.0)) < minimum:
+            failures.append(f"{metric}_below_threshold")
+    if policy.get("baseline_required") and baseline_result is None:
+        failures.append("baseline_required")
+    if baseline_result and not baseline_result.get("passed", False):
+        failures.extend(baseline_result.get("failures") or [])
+    return {
+        "passed": not failures,
+        "strategy": strategy_name,
+        "minimum_case_count": minimum_case_count,
+        "minimums": minimums,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
 def compare_strategy_cases(
     reference: Mapping[str, Any],
     candidate: Mapping[str, Any],
@@ -392,17 +449,20 @@ def main() -> None:
     parser.add_argument("--report", help="写机读 JSON 报告")
     parser.add_argument("--baseline", help="批准的基线 JSON")
     parser.add_argument("--gate", action="store_true")
+    parser.add_argument("--gate-config", default=str(DEFAULT_GATE_CONFIG))
+    parser.add_argument("--gate-profile", choices=["offline_fixture", "online"])
     parser.add_argument(
         "--gate-strategy",
         choices=["dense_only", "hybrid", "hybrid_rerank"],
         default="hybrid",
         help="strategy that must satisfy absolute thresholds; baseline deltas still check all",
     )
-    parser.add_argument("--min-recall", type=float, default=0.6)
-    parser.add_argument("--min-precision", type=float, default=0.1)
-    parser.add_argument("--min-mrr", type=float, default=0.5)
-    parser.add_argument("--min-ndcg", type=float, default=0.5)
-    parser.add_argument("--min-hit-rate", type=float, default=0.0)
+    parser.add_argument("--min-recall", type=float)
+    parser.add_argument("--min-precision", type=float)
+    parser.add_argument("--min-mrr", type=float)
+    parser.add_argument("--min-ndcg", type=float)
+    parser.add_argument("--min-hit-rate", type=float)
+    parser.add_argument("--min-case-count", type=int)
     parser.add_argument("--min-candidate-recall", type=float)
     parser.add_argument("--max-p95-latency-ms", type=float)
     parser.add_argument("--max-recall-regressed-cases", type=int)
@@ -416,6 +476,20 @@ def main() -> None:
         parser.error("--candidate-k must be greater than or equal to --k")
     if args.max_recall_regressed_cases is not None and args.max_recall_regressed_cases < 0:
         parser.error("--max-recall-regressed-cases must be >= 0")
+    if args.min_case_count is not None and args.min_case_count <= 0:
+        parser.error("--min-case-count must be greater than zero")
+
+    gate_profile = args.gate_profile or (
+        "offline_fixture" if args.fixture else "online"
+    )
+    gate_policy: Dict[str, Any] = {}
+    if args.gate:
+        try:
+            gate_policy = load_gate_profile(
+                args.gate_config, "retrieval", gate_profile
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
 
     try:
         cases = load_golden(Path(args.golden))
@@ -488,8 +562,55 @@ def main() -> None:
         baseline_commit = baseline_payload.get("baseline_commit")
         baseline_result = compare_baseline(report, baseline_payload)
 
+    if gate_policy and gate_policy.get("evaluation_mode") != evaluation_mode:
+        parser.error(
+            f"gate profile {gate_profile!r} expects "
+            f"{gate_policy.get('evaluation_mode')!r}, got {evaluation_mode!r}"
+        )
+
+    gate = None
+    if args.gate:
+        try:
+            gate = evaluate_retrieval_gate(
+                report,
+                strategy_name=args.gate_strategy,
+                policy=gate_policy,
+                baseline_result=baseline_result,
+                overrides={
+                    "case_count": args.min_case_count,
+                    "recall_at_k": args.min_recall,
+                    "precision_at_k": args.min_precision,
+                    "mrr": args.min_mrr,
+                    "ndcg_at_k": args.min_ndcg,
+                    "hit_rate": args.min_hit_rate,
+                },
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        selected = report[args.gate_strategy]
+        if (
+            args.min_candidate_recall is not None
+            and selected["recall_at_candidate_k"] < args.min_candidate_recall
+        ):
+            gate["failures"].append("candidate_recall_below_threshold")
+        if (
+            args.max_p95_latency_ms is not None
+            and selected["latency_ms_p95"] > args.max_p95_latency_ms
+        ):
+            gate["failures"].append("p95_latency_above_threshold")
+        comparison = comparisons.get("hybrid_to_hybrid_rerank")
+        if (
+            args.max_recall_regressed_cases is not None
+            and args.gate_strategy == "hybrid_rerank"
+            and comparison
+            and comparison["recall_regressed_count"] > args.max_recall_regressed_cases
+        ):
+            gate["failures"].append("too_many_recall_regressed_cases")
+        gate["failures"] = list(dict.fromkeys(gate["failures"]))
+        gate["passed"] = not gate["failures"]
+
     output = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "baseline_commit": baseline_commit,
         "current_commit": _current_commit(),
@@ -499,54 +620,17 @@ def main() -> None:
         "comparisons": comparisons,
         "reranker": reranker_status,
         "baseline": baseline_result,
+        "gate_policy": gate_policy or None,
+        "gate": gate,
     }
     if args.report:
         report_path = Path(args.report)
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    if args.gate:
-        selected = report.get(args.gate_strategy)
-        if selected is None:
-            parser.error(f"--gate-strategy {args.gate_strategy!r} was not evaluated")
-        failures = []
-        if selected["recall_at_k"] < args.min_recall:
-            failures.append("recall_below_threshold")
-        if selected["precision_at_k"] < args.min_precision:
-            failures.append("precision_below_threshold")
-        if selected["mrr"] < args.min_mrr:
-            failures.append("mrr_below_threshold")
-        if selected["ndcg_at_k"] < args.min_ndcg:
-            failures.append("ndcg_below_threshold")
-        if selected["hit_rate"] < args.min_hit_rate:
-            failures.append("hit_rate_below_threshold")
-        if (
-            args.min_candidate_recall is not None
-            and selected["recall_at_candidate_k"] < args.min_candidate_recall
-        ):
-            failures.append("candidate_recall_below_threshold")
-        if (
-            args.max_p95_latency_ms is not None
-            and selected["latency_ms_p95"] > args.max_p95_latency_ms
-        ):
-            failures.append("p95_latency_above_threshold")
-        comparison = comparisons.get("hybrid_to_hybrid_rerank")
-        if (
-            args.max_recall_regressed_cases is not None
-            and args.gate_strategy == "hybrid_rerank"
-            and comparison
-            and comparison["recall_regressed_count"] > args.max_recall_regressed_cases
-        ):
-            failures.append("too_many_recall_regressed_cases")
-        if baseline_result and not baseline_result["passed"]:
-            failures.extend(baseline_result["failures"])
-        gate = {
-            "passed": not failures,
-            "strategy": args.gate_strategy,
-            "failures": failures,
-        }
+    if gate is not None:
         print(json.dumps({"gate": gate}, ensure_ascii=False))
-        if failures:
+        if not gate["passed"]:
             raise SystemExit(1)
 
 

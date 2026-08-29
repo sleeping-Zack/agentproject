@@ -31,6 +31,11 @@ from typing import Any, Dict, List, Optional
 
 from observability.tracing import trace_recorder
 from rag.eval_gate import EvalGate, EvalThresholds
+from utils.evaluation_gate_config import (
+    DEFAULT_GATE_CONFIG,
+    load_gate_profile,
+    policy_value,
+)
 from utils.streaming import get_final_response
 
 
@@ -45,6 +50,12 @@ class CaseResult:
     citation_validity: float = 1.0
     artifact_saved: bool = True
     bucket: str = "general"
+    risk_tier: str = "standard"
+    tool_applicable: bool = False
+    keyword_applicable: bool = False
+    parameter_applicable: bool = False
+    citation_applicable: bool = False
+    artifact_applicable: bool = False
     latency_ms: float = 0.0
     error_type: Optional[str] = None
     error: Optional[str] = None
@@ -53,7 +64,51 @@ class CaseResult:
 
 def load_golden(path: Path) -> List[Dict]:
     with path.open("r", encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
+        cases = [json.loads(line) for line in f if line.strip()]
+    if not cases:
+        raise ValueError("agent golden must not be empty")
+    seen = set()
+    for case in cases:
+        case_id = case.get("id")
+        if not isinstance(case_id, str) or not case_id or case_id in seen:
+            raise ValueError(f"invalid or duplicate agent case id: {case_id}")
+        seen.add(case_id)
+    return cases
+
+
+def apply_gate_metadata(
+    cases: List[Dict], policy: Dict[str, Any], *, strict: bool = True
+) -> None:
+    """Attach audited risk tiers while rejecting unclassified gated buckets."""
+    risk_by_bucket = policy.get("bucket_risk_tiers") or {}
+    for case in cases:
+        bucket = str(case.get("bucket") or _infer_bucket(case))
+        risk_tier = case.get("risk_tier") or risk_by_bucket.get(bucket)
+        if risk_tier not in {"standard", "high"} and strict:
+            raise ValueError(
+                f"agent case {case['id']} bucket {bucket!r} has no valid risk tier"
+            )
+        case["_gate_risk_tier"] = risk_tier or "standard"
+
+
+def _case_dimensions(case: Dict) -> Dict[str, bool | str]:
+    expected_tools = list(case.get("expected_tools") or [])
+    bucket = str(case.get("bucket") or _infer_bucket(case))
+    expected_status = case.get(
+        "expected_status", "rejected" if case.get("expected_rejection") else "completed"
+    )
+    return {
+        "risk_tier": str(case.get("_gate_risk_tier") or case.get("risk_tier") or "standard"),
+        "tool_applicable": bool(expected_tools),
+        "keyword_applicable": bool(case.get("expected_keywords")),
+        "parameter_applicable": any(tool.get("args") is not None for tool in expected_tools),
+        "citation_applicable": bool(
+            case.get("citation_applicable", bucket in {"rag", "citation"})
+        ),
+        "artifact_applicable": bool(
+            case.get("expect_artifact", expected_status == "completed")
+        ),
+    }
 
 
 def _case_query(case: Dict) -> str:
@@ -110,6 +165,7 @@ def _evaluate_case(agent, case: Dict) -> CaseResult:
     expected_keywords = case.get("expected_keywords", [])
     expected_rejection = case.get("expected_rejection", False)
     bucket = case.get("bucket", _infer_bucket(case))
+    dimensions = _case_dimensions(case)
 
     from uuid import uuid4
     request_id = str(uuid4())
@@ -133,7 +189,8 @@ def _evaluate_case(agent, case: Dict) -> CaseResult:
     except Exception as exc:
         return CaseResult(
             id=case["id"], passed=False, tool_recall=0.0, keyword_recall=0.0,
-            rejected=None, bucket=bucket, latency_ms=_elapsed_ms(started),
+            parameter_accuracy=0.0, citation_validity=0.0, artifact_saved=False,
+            rejected=None, bucket=bucket, **dimensions, latency_ms=_elapsed_ms(started),
             error_type="exception", error=str(exc),
             detail={"trace": traceback.format_exc()[-500:]},
         )
@@ -144,6 +201,7 @@ def _evaluate_case(agent, case: Dict) -> CaseResult:
         return CaseResult(
             id=case["id"], passed=rejected, tool_recall=1.0 if rejected else 0.0,
             keyword_recall=1.0, rejected=rejected, bucket=bucket,
+            **dimensions,
             latency_ms=_elapsed_ms(started),
             error_type=None if rejected else "expected_rejection_not_triggered",
             detail={"answer_preview": answer[:120]},
@@ -167,6 +225,7 @@ def _evaluate_case(agent, case: Dict) -> CaseResult:
     return CaseResult(
         id=case["id"], passed=passed, tool_recall=tool_recall,
         keyword_recall=keyword_recall, rejected=False, bucket=bucket,
+        **dimensions,
         latency_ms=_elapsed_ms(started),
         error_type=None if passed else _failure_type(tool_recall, keyword_recall),
         detail={
@@ -191,31 +250,50 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="不实际跑 Agent，只校验 golden 文件格式（CI 默认）")
     parser.add_argument("--gate", action="store_true", help="启用质量门禁，未达阈值返回非 0")
-    parser.add_argument("--min-pass-rate", type=float,
-                        default=float(os.getenv("AGENT_EVAL_MIN_PASS_RATE", "0.85")))
-    parser.add_argument("--min-tool-recall", type=float,
-                        default=float(os.getenv("AGENT_EVAL_MIN_TOOL_RECALL", "0.75")))
-    parser.add_argument("--min-keyword-recall", type=float,
-                        default=float(os.getenv("AGENT_EVAL_MIN_KEYWORD_RECALL", "0.75")))
-    parser.add_argument("--max-p95-latency-ms", type=float,
-                        default=float(os.getenv("AGENT_EVAL_MAX_P95_LATENCY_MS", "5000")))
-    parser.add_argument("--max-avg-cost", type=float,
-                        default=float(os.getenv("AGENT_EVAL_MAX_AVG_COST", "0.2")))
-    parser.add_argument("--min-parameter-accuracy", type=float, default=0.9)
-    parser.add_argument("--min-citation-validity", type=float, default=0.9)
-    parser.add_argument("--min-case-count", type=int, default=1)
+    parser.add_argument("--gate-config", default=str(DEFAULT_GATE_CONFIG))
+    parser.add_argument("--gate-profile", choices=["offline_fixture", "online"])
+    parser.add_argument("--min-pass-rate", type=float)
+    parser.add_argument("--min-tool-recall", type=float)
+    parser.add_argument("--min-keyword-recall", type=float)
+    parser.add_argument("--min-parameter-accuracy", type=float)
+    parser.add_argument("--min-citation-validity", type=float)
+    parser.add_argument("--min-standard-tool-recall", type=float)
+    parser.add_argument("--min-high-risk-pass-rate", type=float)
+    parser.add_argument("--min-high-risk-tool-recall", type=float)
+    parser.add_argument(
+        "--max-offline-harness-p95-ms",
+        "--max-p95-latency-ms",
+        dest="max_offline_harness_p95_ms",
+        type=float,
+    )
+    parser.add_argument("--max-avg-cost", type=float)
+    parser.add_argument("--min-case-count", type=int)
     parser.add_argument("--baseline", help="批准的 Agent 评测基线 JSON")
     args = parser.parse_args()
 
-    cases = load_golden(Path(args.golden))
+    gate_profile = args.gate_profile or ("offline_fixture" if args.offline else "online")
+    try:
+        gate_policy = load_gate_profile(args.gate_config, "agent", gate_profile)
+        cases = load_golden(Path(args.golden))
+        apply_gate_metadata(cases, gate_policy, strict=args.gate)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
     if args.smoke:
         cases = cases[: args.smoke_limit]
+
+    evaluation_mode = "offline_harness" if args.offline else "online_harness"
+    if gate_policy.get("evaluation_mode") != evaluation_mode:
+        parser.error(
+            f"gate profile {gate_profile!r} expects "
+            f"{gate_policy.get('evaluation_mode')!r}, got {evaluation_mode!r}"
+        )
 
     if args.dry_run:
         report = {
             "case_count": len(cases),
             "dry_run": True,
             "mode": args.mode,
+            "gate_profile": gate_profile,
             "ids": [c["id"] for c in cases],
         }
         print(json.dumps(report, ensure_ascii=False))
@@ -253,43 +331,147 @@ def main() -> None:
                  "answer_preview": result.detail.get("answer_preview", "")[:80]},
                 ensure_ascii=False))
 
-    aggregate = {
-        "case_count": len(results),
-        "pass_rate": _avg(r.passed for r in results),
-        "tool_recall": _avg(r.tool_recall for r in results),
-        "keyword_recall": _avg(r.keyword_recall for r in results),
-        "parameter_accuracy": _avg(r.parameter_accuracy for r in results),
-        "citation_validity": _avg(r.citation_validity for r in results),
-        "artifact_save_rate": _avg(r.artifact_saved for r in results),
-        "duration_s": round(time.time() - started, 2),
-    }
-    latency = {
+    aggregate = _summarize_results(results)
+    aggregate["duration_s"] = round(time.time() - started, 2)
+    evaluation_runtime = {
+        "scope": (
+            "offline_harness_control_plane" if args.offline else "online_evaluation_case"
+        ),
         "p50_ms": _percentile([r.latency_ms for r in results], 50),
         "p95_ms": _percentile([r.latency_ms for r in results], 95),
+        "is_end_to_end_performance_gate": False,
     }
+    offline_harness_latency = evaluation_runtime if args.offline else None
     cost = _summarize_cost(results)
     case_payload = [r.__dict__ for r in results]
-    gate_result = EvalGate(
-        EvalThresholds(
-            min_pass_rate=args.min_pass_rate,
-            min_tool_recall=args.min_tool_recall,
-            min_keyword_recall=args.min_keyword_recall,
-            max_p95_latency_ms=args.max_p95_latency_ms,
-            max_avg_cost=args.max_avg_cost,
-        )
-    ).evaluate({
+    buckets = _summarize_buckets(results)
+    risk_tiers = _summarize_risk_tiers(results)
+    applicable_case_counts = {
+        "tool": aggregate["tool_case_count"],
+        "keyword": aggregate["keyword_case_count"],
+        "parameter": aggregate["parameter_case_count"],
+        "citation": aggregate["citation_case_count"],
+        "artifact": aggregate["artifact_case_count"],
+    }
+
+    thresholds = EvalThresholds(
+        min_pass_rate=_setting(
+            args.min_pass_rate,
+            gate_policy,
+            "metrics.pass_rate.minimum",
+            0.85,
+            "AGENT_EVAL_MIN_PASS_RATE",
+        ),
+        min_tool_recall=_setting(
+            args.min_tool_recall,
+            gate_policy,
+            "metrics.tool_recall.minimum",
+            0.75,
+            "AGENT_EVAL_MIN_TOOL_RECALL",
+        ),
+        min_keyword_recall=_setting(
+            args.min_keyword_recall,
+            gate_policy,
+            "metrics.keyword_recall.minimum",
+            0.75,
+            "AGENT_EVAL_MIN_KEYWORD_RECALL",
+        ),
+        min_parameter_accuracy=_setting(
+            args.min_parameter_accuracy,
+            gate_policy,
+            "metrics.parameter_accuracy.minimum",
+            0.9,
+        ),
+        min_citation_validity=_setting(
+            args.min_citation_validity,
+            gate_policy,
+            "metrics.citation_validity.minimum",
+            0.9,
+        ),
+        min_standard_tool_recall=_setting(
+            args.min_standard_tool_recall,
+            gate_policy,
+            "standard_tool_recall.minimum",
+            0.9,
+        ),
+        min_high_risk_pass_rate=_setting(
+            args.min_high_risk_pass_rate,
+            gate_policy,
+            "hard_constraints.high_risk_pass_rate.minimum",
+            1.0,
+        ),
+        min_high_risk_tool_recall=_setting(
+            args.min_high_risk_tool_recall,
+            gate_policy,
+            "hard_constraints.high_risk_tool_recall.minimum",
+            1.0,
+        ),
+        min_high_risk_parameter_accuracy=_setting(
+            None,
+            gate_policy,
+            "hard_constraints.high_risk_parameter_accuracy.minimum",
+            1.0,
+        ),
+        min_high_risk_citation_validity=_setting(
+            None,
+            gate_policy,
+            "hard_constraints.high_risk_citation_validity.minimum",
+            1.0,
+        ),
+        min_case_count=int(
+            args.min_case_count
+            if args.min_case_count is not None
+            else gate_policy.get("minimum_case_count", 1)
+        ),
+        minimum_bucket_case_counts={
+            str(name): int(count)
+            for name, count in (
+                gate_policy.get("minimum_bucket_case_counts") or {}
+            ).items()
+        },
+        minimum_risk_case_counts={
+            str(name): int(count)
+            for name, count in (
+                gate_policy.get("minimum_risk_case_counts") or {}
+            ).items()
+        },
+        minimum_applicable_case_counts={
+            str(name): int(count)
+            for name, count in (
+                gate_policy.get("minimum_applicable_case_counts") or {}
+            ).items()
+        },
+        max_offline_harness_p95_ms=_optional_setting(
+            args.max_offline_harness_p95_ms,
+            gate_policy,
+            "offline_harness_latency.p95_ms.maximum",
+            "AGENT_EVAL_MAX_P95_LATENCY_MS",
+        ),
+        max_avg_cost=_setting(
+            args.max_avg_cost,
+            gate_policy,
+            "cost.average_case.maximum",
+            0.2,
+            "AGENT_EVAL_MAX_AVG_COST",
+        ),
+    )
+    gate_input = {
         "aggregate": aggregate,
-        "latency": latency,
+        "offline_harness_latency": offline_harness_latency,
         "cost": cost,
+        "buckets": buckets,
+        "risk_tiers": risk_tiers,
+        "applicable_case_counts": applicable_case_counts,
         "cases": case_payload,
-    })
-    baseline_result = _compare_baseline(aggregate, latency, args.baseline)
-    if aggregate["case_count"] < args.min_case_count:
-        gate_result.failures.append("case_count_below_threshold")
-    if aggregate["parameter_accuracy"] < args.min_parameter_accuracy:
-        gate_result.failures.append("parameter_accuracy_below_threshold")
-    if aggregate["citation_validity"] < args.min_citation_validity:
-        gate_result.failures.append("citation_validity_below_threshold")
+    }
+    gate_result = EvalGate(
+        thresholds
+    ).evaluate(gate_input)
+    baseline_result = _compare_baseline(
+        aggregate, offline_harness_latency, args.baseline
+    )
+    if gate_policy.get("baseline_required") and baseline_result is None:
+        gate_result.failures.append("baseline_required")
     if baseline_result and not baseline_result["passed"]:
         gate_result.failures.extend(baseline_result["failures"])
     gate_result.failures = list(dict.fromkeys(gate_result.failures))
@@ -297,15 +479,21 @@ def main() -> None:
     print(json.dumps(aggregate, ensure_ascii=False))
 
     report_payload = {
+        "schema_version": 2,
         "aggregate": aggregate,
-        "latency": latency,
+        "evaluation_runtime": evaluation_runtime,
+        "offline_harness_latency": offline_harness_latency,
         "cost": cost,
         "mode": args.mode,
         "offline": args.offline,
+        "evaluation_mode": evaluation_mode,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "current_commit": _current_commit(),
         "baseline": baseline_result,
-        "buckets": _summarize_buckets(results),
+        "gate_policy": gate_policy,
+        "buckets": buckets,
+        "risk_tiers": risk_tiers,
+        "applicable_case_counts": applicable_case_counts,
         "gate": gate_result.__dict__,
         "cases": case_payload,
     }
@@ -331,11 +519,86 @@ def _avg(seq) -> float:
     return round(sum(float(x) for x in seq) / len(seq), 3)
 
 
+def _setting(
+    explicit: Optional[float],
+    policy: Dict[str, Any],
+    path: str,
+    fallback: float,
+    environment_name: Optional[str] = None,
+) -> float:
+    if explicit is not None:
+        return float(explicit)
+    configured = policy_value(policy, path)
+    if configured is not None:
+        return float(configured)
+    if environment_name and os.getenv(environment_name) is not None:
+        return float(os.environ[environment_name])
+    return float(fallback)
+
+
+def _optional_setting(
+    explicit: Optional[float],
+    policy: Dict[str, Any],
+    path: str,
+    environment_name: Optional[str] = None,
+) -> Optional[float]:
+    if explicit is not None:
+        return float(explicit)
+    configured = policy_value(policy, path)
+    if configured is not None:
+        return float(configured)
+    if environment_name and os.getenv(environment_name) is not None:
+        return float(os.environ[environment_name])
+    return None
+
+
+def _applicable_average(
+    results: List[CaseResult], value_field: str, applicable_field: str
+) -> tuple[Optional[float], int]:
+    applicable = [row for row in results if getattr(row, applicable_field)]
+    if not applicable:
+        return None, 0
+    return _avg(getattr(row, value_field) for row in applicable), len(applicable)
+
+
+def _summarize_results(results: List[CaseResult]) -> Dict[str, Any]:
+    tool_recall, tool_count = _applicable_average(
+        results, "tool_recall", "tool_applicable"
+    )
+    keyword_recall, keyword_count = _applicable_average(
+        results, "keyword_recall", "keyword_applicable"
+    )
+    parameter_accuracy, parameter_count = _applicable_average(
+        results, "parameter_accuracy", "parameter_applicable"
+    )
+    citation_validity, citation_count = _applicable_average(
+        results, "citation_validity", "citation_applicable"
+    )
+    artifact_save_rate, artifact_count = _applicable_average(
+        results, "artifact_saved", "artifact_applicable"
+    )
+    return {
+        "case_count": len(results),
+        "pass_rate": _avg(row.passed for row in results),
+        "tool_recall": tool_recall,
+        "tool_case_count": tool_count,
+        "keyword_recall": keyword_recall,
+        "keyword_case_count": keyword_count,
+        "parameter_accuracy": parameter_accuracy,
+        "parameter_case_count": parameter_count,
+        "citation_validity": citation_validity,
+        "citation_case_count": citation_count,
+        "artifact_save_rate": artifact_save_rate,
+        "artifact_case_count": artifact_count,
+    }
+
+
 def _evaluate_case_harness(runner, case: Dict) -> CaseResult:
     expected_tools = [t.get("name") for t in case.get("expected_tools", [])]
     expected_keywords = case.get("expected_keywords", [])
     expected_rejection = case.get("expected_rejection", False)
     bucket = case.get("bucket", _infer_bucket(case))
+    dimensions = _case_dimensions(case)
 
     from agent.runner import AgentTask
     from uuid import uuid4
@@ -363,7 +626,8 @@ def _evaluate_case_harness(runner, case: Dict) -> CaseResult:
     except Exception as exc:
         return CaseResult(
             id=case["id"], passed=False, tool_recall=0.0, keyword_recall=0.0,
-            rejected=None, bucket=bucket, latency_ms=_elapsed_ms(started),
+            parameter_accuracy=0.0, citation_validity=0.0, artifact_saved=False,
+            rejected=None, bucket=bucket, **dimensions, latency_ms=_elapsed_ms(started),
             error_type="exception", error=str(exc),
             detail={"trace": traceback.format_exc()[-500:], "request_id": request_id},
         )
@@ -419,6 +683,7 @@ def _evaluate_case_harness(runner, case: Dict) -> CaseResult:
         citation_validity=citation_validity,
         artifact_saved=artifact_saved,
         bucket=bucket,
+        **dimensions,
         latency_ms=_elapsed_ms(started),
         error_type=None if passed else _harness_failure_type(
             status_matches, tool_recall, keyword_recall, parameter_accuracy,
@@ -474,19 +739,18 @@ def _harness_failure_type(
     return "failed"
 
 
-def _summarize_buckets(results: List[CaseResult]) -> Dict[str, Dict[str, float]]:
+def _summarize_buckets(results: List[CaseResult]) -> Dict[str, Dict[str, Any]]:
     buckets: Dict[str, List[CaseResult]] = {}
     for result in results:
         buckets.setdefault(result.bucket, []).append(result)
-    return {
-        name: {
-            "case_count": len(rows),
-            "pass_rate": _avg(row.passed for row in rows),
-            "tool_recall": _avg(row.tool_recall for row in rows),
-            "keyword_recall": _avg(row.keyword_recall for row in rows),
-        }
-        for name, rows in sorted(buckets.items())
-    }
+    return {name: _summarize_results(rows) for name, rows in sorted(buckets.items())}
+
+
+def _summarize_risk_tiers(results: List[CaseResult]) -> Dict[str, Dict[str, Any]]:
+    tiers: Dict[str, List[CaseResult]] = {}
+    for result in results:
+        tiers.setdefault(result.risk_tier, []).append(result)
+    return {name: _summarize_results(rows) for name, rows in sorted(tiers.items())}
 
 
 def _current_commit() -> Optional[str]:
@@ -500,7 +764,11 @@ def _current_commit() -> Optional[str]:
     return completed.stdout.strip() or None
 
 
-def _compare_baseline(aggregate: Dict, latency: Dict, baseline_path: Optional[str]):
+def _compare_baseline(
+    aggregate: Dict,
+    offline_harness_latency: Optional[Dict],
+    baseline_path: Optional[str],
+):
     if not baseline_path:
         return None
     baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
@@ -520,12 +788,21 @@ def _compare_baseline(aggregate: Dict, latency: Dict, baseline_path: Optional[st
         deltas[metric] = delta
         if delta < -float(allowed.get(metric, 0.0)):
             failures.append(f"{metric}_regressed:{delta}")
-    latency_delta = round(
-        float(latency.get("p95_ms", 0.0)) - float(baseline.get("p95_latency_ms", 0.0)), 3
+    baseline_latency = baseline.get(
+        "offline_harness_p95_latency_ms", baseline.get("p95_latency_ms")
     )
-    deltas["p95_latency_ms"] = latency_delta
-    if latency_delta > float(allowed.get("p95_latency_ms", 0.0)):
-        failures.append(f"p95_latency_regressed:{latency_delta}")
+    if offline_harness_latency is not None and baseline_latency is not None:
+        latency_delta = round(
+            float(offline_harness_latency.get("p95_ms", 0.0))
+            - float(baseline_latency),
+            3,
+        )
+        deltas["offline_harness_p95_latency_ms"] = latency_delta
+        latency_tolerance = allowed.get(
+            "offline_harness_p95_latency_ms", allowed.get("p95_latency_ms", 0.0)
+        )
+        if latency_delta > float(latency_tolerance):
+            failures.append(f"offline_harness_p95_latency_regressed:{latency_delta}")
     return {
         "passed": not failures,
         "baseline_commit": baseline.get("baseline_commit"),

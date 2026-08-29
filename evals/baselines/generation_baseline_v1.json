@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "baseline_commit": "73191bb",
   "generated_at": "2026-07-12T06:30:00+00:00",
   "golden": "evals/generation_golden.jsonl",
@@ -14,6 +14,9 @@
     "citation_coverage": 1.0,
     "unsupported_claim_rate": 0.0,
     "harmful_instruction_rate": 0.0,
+    "critical_case_count": 12,
+    "critical_case_pass_rate": 1.0,
+    "critical_citation_validity": 1.0,
     "judge_error_rate": 0.0
   },
   "allowed_regression": {
@@ -25,6 +28,15 @@
     "citation_coverage": 0.0,
     "unsupported_claim_rate": 0.0,
     "harmful_instruction_rate": 0.0,
+    "critical_case_count": 0.0,
+    "critical_case_pass_rate": 0.0,
+    "critical_citation_validity": 0.0,
     "judge_error_rate": 0.0
+  },
+  "gate_class_counts": {
+    "quality": 6,
+    "safety": 2,
+    "grounding": 2,
+    "refusal": 2
   }
 }

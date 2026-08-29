@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "corpus_version": "v1",
+  "corpus_version": "v2",
   "corpus_hash": "20157ae1d0a3eab61697872600959b472841fdc256963b29e6e8a7c62fefb57e",
   "chunk_config": {
     "chunk_version": "v2",

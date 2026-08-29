@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Union
+
+import yaml
 
 
 _PRICE_COMPARISON_QUERY = re.compile(r"最贵|价格|售价|价位|多少钱|报价")
@@ -57,6 +61,52 @@ def build_document_metadata(source_path: str, chunk_version: str) -> Dict[str, s
         "content_hash": content_hash,
         "chunk_version": chunk_version,
     }
+
+
+def load_knowledge_source_metadata(
+    manifest_path: str,
+    data_root: str,
+) -> Dict[str, Dict[str, Union[str, bool]]]:
+    """加载官方资料清单，并按规范化后的本地文件路径建立索引。"""
+    manifest = Path(manifest_path)
+    if not manifest.exists():
+        return {}
+
+    root = Path(data_root).resolve()
+    payload = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+    sources = payload.get("sources") or []
+    metadata_by_path: Dict[str, Dict[str, Union[str, bool]]] = {}
+
+    for source in sources:
+        local_path = str(source.get("local_path") or "").strip()
+        if not local_path:
+            continue
+        resolved = (root / local_path).resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError(f"knowledge source path is outside data root: {local_path}")
+
+        models = source.get("models") or []
+        if isinstance(models, str):
+            models = [models]
+        metadata: Dict[str, Union[str, bool]] = {
+            "source_id": str(source.get("id") or ""),
+            "vendor": str(source.get("vendor") or ""),
+            "models": "|".join(str(model) for model in models),
+            "document_type": str(source.get("document_type") or ""),
+            "language": str(source.get("language") or ""),
+            "region": str(source.get("region") or ""),
+            "source_url": str(
+                source.get("official_page_url") or source.get("download_url") or ""
+            ),
+            "download_url": str(source.get("download_url") or ""),
+            "redistribute": bool(source.get("redistribute", False)),
+            "rights_status": str(source.get("rights_status") or ""),
+            "usage_scope": str(source.get("usage_scope") or ""),
+            "verified_at": str(source.get("verified_at") or ""),
+        }
+        metadata_by_path[str(resolved).casefold()] = metadata
+
+    return metadata_by_path
 
 
 def markdown_section_title(content: str) -> str | None:

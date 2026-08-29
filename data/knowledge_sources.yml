@@ -1,0 +1,318 @@
+version: official-sources-v1
+verified_at: "2026-08-28"
+policy:
+  purpose: "官方产品、故障与售后资料的可追溯来源目录"
+  default_rights_status: copyrighted_public_access
+  default_usage_scope: link_and_factual_summary
+  redistribute_full_text: false
+  notes:
+    - "公开可访问不等于开放许可；不要把厂商网页或整本说明书随项目重新发布。"
+    - "商业环境批量抓取或全文入库前，应核对厂商条款并取得所需授权。"
+    - "保修和售后记录必须同时绑定型号、国家或地区与核验日期。"
+
+sources:
+  - id: roborock-t7s-plus-manual-zh-cn
+    vendor: Roborock
+    models: [T7S Plus, "A23*0RR"]
+    document_type: user_manual
+    language: zh-CN
+    region: CN
+    official_page_url: https://www.roborock.com
+    download_url: https://files.roborock.com/uploadImages/images/upload/File/%E7%9F%B3%E5%A4%B4%E6%89%AB%E6%8B%96%E6%9C%BA%E5%99%A8%E4%BA%BAT7S%20Plus%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E%E4%B9%A6.pdf
+    local_path: vendor_manuals/roborock/t7s_plus_zh_cn.pdf
+    ingest_if_present: true
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: authorized_local_full_text_or_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: roborock-s8-maxv-ultra-manual-en
+    vendor: Roborock
+    models: [S8 MaxV Ultra, S82USV]
+    document_type: user_manual
+    language: en
+    region: US
+    official_page_url: https://help.roborock.com/en-US/product/s8-maxv-ultra
+    download_url: https://support.roborock.com/hc/en-us/article_attachments/48696021303321
+    local_path: vendor_manuals/roborock/s8_maxv_ultra_en.pdf
+    ingest_if_present: true
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: authorized_local_full_text_or_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: roborock-support-center
+    vendor: Roborock
+    models: []
+    document_type: support_hub
+    language: en
+    region: GLOBAL
+    official_page_url: https://support.roborock.com/hc/en-us
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: roborock-service-warranty
+    vendor: Roborock
+    models: []
+    document_type: after_sales
+    language: en
+    region: GLOBAL
+    official_page_url: https://global.roborock.com/pages/service-warranty
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_region_scoped_summary
+    verified_at: "2026-08-28"
+
+  - id: irobot-roomba-j7-manual-zh-cn
+    vendor: iRobot
+    models: [Roomba j7, Roomba j7+]
+    document_type: user_manual
+    language: zh-CN
+    region: CN
+    official_page_url: https://homesupport.irobot.com/articles/en_US/Knowledge/843
+    download_url: https://prod-help-content.care.irobotapi.com/files/j_series/og/robot_only_CHINA.pdf
+    local_path: vendor_manuals/irobot/roomba_j7_zh_cn.pdf
+    ingest_if_present: true
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: personal_or_authorized_local_full_text_or_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: irobot-new-owner-guides
+    vendor: iRobot
+    models: [100 Series, 1000 Series, 200 Series, 2000 Series, Plus 400, Plus 500, Max 700]
+    document_type: manual_catalog
+    language: multi
+    region: GLOBAL
+    official_page_url: https://homesupport.irobot.com/articles/en_US/Knowledge/845
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: irobot-classic-owner-guides
+    vendor: iRobot
+    models: [Essential, Roomba j Series, Roomba i Series, Roomba s Series, Combo 10 Max]
+    document_type: manual_catalog
+    language: multi
+    region: GLOBAL
+    official_page_url: https://homesupport.irobot.com/articles/en_US/Knowledge/843
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: irobot-extended-owner-guides
+    vendor: iRobot
+    models: [Roomba 400 Series, Roomba 500 Series, Roomba 600 Series, Roomba 700 Series, Roomba 800 Series, Roomba 900 Series, Roomba e Series]
+    document_type: manual_catalog
+    language: multi
+    region: GLOBAL
+    official_page_url: https://homesupport.irobot.com/articles/en_US/Knowledge/844
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: irobot-charging-errors
+    vendor: iRobot
+    models: [Roomba, Braava]
+    document_type: troubleshooting
+    language: en
+    region: GLOBAL
+    official_page_url: https://homesupport.irobot.com/articles/en_US/Knowledge/19598
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: irobot-800-runtime-errors
+    vendor: iRobot
+    models: [Roomba 800 Series]
+    document_type: troubleshooting
+    language: en
+    region: GLOBAL
+    official_page_url: https://homesupport.irobot.com/articles/en_US/Knowledge/7265
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: irobot-limited-warranty
+    vendor: iRobot
+    models: [Roomba, Braava]
+    document_type: after_sales
+    language: en
+    region: SPECIFIED_COUNTRIES
+    official_page_url: https://homesupport.irobot.com/articles/en_US/Knowledge/3096
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_region_scoped_summary
+    verified_at: "2026-08-28"
+
+  - id: ecovacs-manual-catalog
+    vendor: ECOVACS
+    models: [DEEBOT X Series, DEEBOT T Series, DEEBOT N Series]
+    document_type: manual_catalog
+    language: multi
+    region: GLOBAL
+    official_page_url: https://help.ecovacs.com/global/support/instruction-manual
+    redistribute: false
+    rights_status: copyrighted_public_access_no_automated_collection
+    usage_scope: link_and_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: ecovacs-deebot-x2-omni-manual-en-zh-tw
+    vendor: ECOVACS
+    models: [DEEBOT X2 OMNI]
+    document_type: user_manual
+    language: en|zh-TW
+    region: HK
+    official_page_url: https://help.ecovacs.com/hk/support/deebot-x2-omni-black
+    download_url: https://site-static.ecovacs.com/upload/hk/file/support/2023/09/01/090350_1122-DEEBOTX2OMNI-ENZH-TW.pdf
+    local_path: vendor_manuals/ecovacs/deebot_x2_omni_en_zh_tw.pdf
+    ingest_if_present: true
+    redistribute: false
+    rights_status: copyrighted_public_access_no_automated_collection
+    usage_scope: written_permission_required_for_systematic_or_commercial_full_text
+    verified_at: "2026-08-28"
+
+  - id: ecovacs-legacy-e01-e10-manual-zh-cn
+    vendor: ECOVACS
+    models: [CR130, CR131, CEN620, CEN130, CEN640]
+    document_type: user_manual
+    language: zh-CN
+    region: CN
+    official_page_url: https://www.ecovacs.com/cn/support
+    download_url: https://static.ecovacs.cn/upload/servicecenter/2015/06/20150603085103800.pdf
+    local_path: vendor_manuals/ecovacs/legacy_cr130_e01_e10_zh_cn.pdf
+    ingest_if_present: true
+    redistribute: false
+    rights_status: copyrighted_public_access_no_automated_collection
+    usage_scope: written_permission_required_for_systematic_or_commercial_full_text
+    verified_at: "2026-08-28"
+
+  - id: ecovacs-cn-repair
+    vendor: ECOVACS
+    models: []
+    document_type: after_sales
+    language: zh-CN
+    region: CN
+    official_page_url: https://www.ecovacs.com/cn/support/repair
+    redistribute: false
+    rights_status: copyrighted_public_access_no_automated_collection
+    usage_scope: link_and_region_scoped_summary
+    verified_at: "2026-08-28"
+
+  - id: dreame-manual-catalog
+    vendor: Dreame
+    models: [X Series, L Series, D Series]
+    document_type: manual_catalog
+    language: multi
+    region: GLOBAL
+    official_page_url: https://global.dreametech.com/pages/user-manuals-and-faqs/1000
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: dreame-x40-ultra-manual
+    vendor: Dreame
+    models: [X40 Ultra, X40 Ultra Complete]
+    document_type: user_manual
+    language: en|de|fr|it
+    region: GLOBAL
+    official_page_url: https://global.dreametech.com/pages/x40-ultra-x40-ultra-complete-user-manual
+    download_url: https://cdn.shopify.com/s/files/1/0302/5276/1220/files/R2416A-X40_UltraX40_Ultra_Complete-_A-_-A04_ERP_-_EN-DE-FR-IT.pdf?v=1747216443
+    local_path: vendor_manuals/dreame/x40_ultra_en_de_fr_it.pdf
+    ingest_if_present: true
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: written_permission_required_for_commercial_full_text
+    verified_at: "2026-08-28"
+
+  - id: dreame-robot-troubleshooting
+    vendor: Dreame
+    models: [Robot Vacuums]
+    document_type: troubleshooting
+    language: en
+    region: GLOBAL
+    official_page_url: https://support.dreametech.com/hc/en-us/sections/10376680416783-Robot-Vacuums
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_factual_summary
+    verified_at: "2026-08-28"
+
+  - id: dreame-cn-after-sales
+    vendor: Dreame
+    models: []
+    document_type: after_sales
+    language: zh-CN
+    region: CN
+    official_page_url: https://www.dreame.tech/help/afterService
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_region_scoped_summary
+    verified_at: "2026-08-28"
+
+  - id: dreame-global-after-sales
+    vendor: Dreame
+    models: []
+    document_type: after_sales
+    language: en
+    region: GLOBAL
+    official_page_url: https://global.dreametech.com/pages/after-sales-policy
+    redistribute: false
+    rights_status: copyrighted_public_access
+    usage_scope: link_and_region_scoped_summary
+    verified_at: "2026-08-28"
+
+  - id: roborock-user-agreement
+    vendor: Roborock
+    models: []
+    document_type: terms_of_use
+    language: en
+    region: GLOBAL
+    official_page_url: https://global.roborock.com/pages/user-agreement
+    redistribute: false
+    rights_status: official_usage_terms
+    usage_scope: rights_audit
+    verified_at: "2026-08-28"
+
+  - id: irobot-website-terms
+    vendor: iRobot
+    models: []
+    document_type: terms_of_use
+    language: en
+    region: US
+    official_page_url: https://www.irobot.com/en_US/legal/terms-and-conditions.html
+    redistribute: false
+    rights_status: official_usage_terms
+    usage_scope: rights_audit
+    verified_at: "2026-08-28"
+
+  - id: ecovacs-website-terms
+    vendor: ECOVACS
+    models: []
+    document_type: terms_of_use
+    language: en
+    region: US
+    official_page_url: https://www.ecovacs.com/us/terms-of-use
+    redistribute: false
+    rights_status: official_usage_terms
+    usage_scope: rights_audit
+    verified_at: "2026-08-28"
+
+  - id: dreame-website-terms
+    vendor: Dreame
+    models: []
+    document_type: terms_of_use
+    language: en
+    region: GLOBAL
+    official_page_url: https://global.dreametech.com/pages/terms-conditions
+    redistribute: false
+    rights_status: official_usage_terms
+    usage_scope: rights_audit
+    verified_at: "2026-08-28"

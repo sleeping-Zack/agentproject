@@ -42,13 +42,19 @@ def listdir_with_allowed_type(path: str, allowed_types: tuple[str]):        # �
 
     if not os.path.isdir(path):
         logger.error(f"[listdir_with_allowed_type]{path}不是文件夹")
-        return allowed_types
+        return tuple()
 
-    for f in os.listdir(path):
-        if f.endswith(allowed_types):
-            files.append(os.path.join(path, f))
+    normalized_types = tuple(
+        file_type.lower().lstrip(".") for file_type in allowed_types
+    )
+    for root, dirs, names in os.walk(path):
+        dirs.sort()
+        for name in sorted(names):
+            suffix = os.path.splitext(name)[1].lower().lstrip(".")
+            if suffix in normalized_types:
+                files.append(os.path.join(root, name))
 
-    return tuple(files)
+    return tuple(sorted(files))
 
 
 def pdf_loader(filepath: str, passwd=None) -> list[Document]:

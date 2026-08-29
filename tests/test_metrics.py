@@ -24,6 +24,7 @@ def test_histogram_buckets_and_export():
     histograms = snapshot["histograms"]
     key = "agent_request_latency_ms"
     assert histograms[key]["count"] == 5
+    assert histograms[key]["buckets"][-1][0] == "+Inf"
     text = reg.render_prometheus()
     assert "agent_request_latency_ms_bucket" in text
     assert "agent_request_latency_ms_count 5" in text
@@ -41,6 +42,18 @@ def test_tool_call_metrics():
     assert 'agent_tool_call_total{status="success",tool="get_weather"} 2' in text
     assert 'agent_tool_call_total{status="failure",tool="get_weather"} 1' in text
     assert "agent_tool_latency_ms_count" in text
+
+
+def test_model_latency_metrics_include_provider_scene_and_status():
+    reg = MetricsRegistry()
+
+    reg.observe_model_latency("mock:model", "rag", "success", 42.0)
+
+    text = reg.render_prometheus()
+    assert "agent_model_latency_ms_count" in text
+    assert 'provider="mock:model"' in text
+    assert 'scene="rag"' in text
+    assert 'status="success"' in text
 
 
 def test_gauge_set_and_overwrite():

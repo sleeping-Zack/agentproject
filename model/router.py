@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 
 from model.providers import ProviderConfig, build_model_provider
 from observability.context import bind_request_context, request_context
+from observability.metrics import metrics_registry
 from services.circuit_breaker import CircuitBreaker, CircuitOpenError
 from utils.logger_handler import logger
 
@@ -90,15 +91,34 @@ class ModelRouter:
                 logger.warning("[router]熔断打开，跳过", extra={"provider": entry.name})
                 continue
             try:
+                started = metrics_registry.now()
                 with bind_request_context(model=entry.name):
                     model = build_model_provider(entry.config).as_langchain_model()
                     result = fn(model)
+                metrics_registry.observe_model_latency(
+                    entry.name,
+                    scene,
+                    "success",
+                    metrics_registry.elapsed_ms(started),
+                )
                 entry.breaker.record_success()
                 return result
             except CircuitOpenError as exc:
+                metrics_registry.observe_model_latency(
+                    entry.name,
+                    scene,
+                    "circuit_open",
+                    metrics_registry.elapsed_ms(started),
+                )
                 last_exc = exc
                 continue
             except Exception as exc:
+                metrics_registry.observe_model_latency(
+                    entry.name,
+                    scene,
+                    "failure",
+                    metrics_registry.elapsed_ms(started),
+                )
                 entry.breaker.record_failure()
                 last_exc = exc
                 logger.warning(

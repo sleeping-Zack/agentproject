@@ -490,8 +490,10 @@ class TaskRouter:
         "weather": ("天气", "气温", "湿度", "下雨", "雨水"),
         "knowledge": (
             "选购", "推荐", "故障", "排查", "保养", "维护", "清洁",
-            "拖布", "电池", "充电", "吸力", "知识库",
+            "拖布", "电池", "充电", "吸力", "知识库", "型号", "规格",
+            "参数", "故障码", "错误码",
         ),
+        "support": ("售后", "工单", "报修", "维修申请"),
     }
     DIRECT_PATTERNS = (
         r"^(你好|您好|嗨|谢谢|感谢|再见|好的|明白了|可以)[！!。.？?\s]*$",
@@ -671,6 +673,9 @@ class TaskRouter:
         if mode == "direct" and required_tools:
             mode = "react"
             reasons.append("tool_requirement_forces_react")
+        if "create_support_ticket" in required_tools:
+            mode = "react"
+            reasons.append("write_tool_forces_react")
 
         transition = (
             f"{proposed_mode}_to_{mode}" if proposed_mode != mode else None
@@ -785,6 +790,21 @@ class TaskRouter:
             for name, keywords in self.DOMAIN_HINTS.items()
             if any(keyword.lower() in text.lower() for keyword in keywords)
         }
+        if "support" in domains and re.search(
+            r"创建|新建|提交|开立|发起|报修|维修申请",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return TaskRoutingDecision(
+                "react",
+                2,
+                ("write_tool_forces_react",),
+                goals=(RoutingGoal(id="g1", description=text or "创建售后工单"),),
+                risk="high",
+                confidence=0.8,
+                decision_source="hard_guard",
+                proposed_mode="react",
+            )
         if len(domains) >= 2:
             score += 3
             reasons.append("cross_domain_request")

@@ -4,6 +4,28 @@ from services.approval_store import SQLiteApprovalStore
 from services.artifact_store import SQLiteArtifactStore
 
 
+def test_backend_extracts_structured_pending_approval_tool_result():
+    tool_results = ReactAgentBackend._extract_tool_results(
+        {
+            "events": [
+                {
+                    "category": "tool",
+                    "name": "create_support_ticket",
+                    "metadata": {
+                        "status": "pending_approval",
+                        "approval_id": "approval-1",
+                        "redacted_args": {"model": "S20"},
+                        "result": "pending_approval approval_id=approval-1",
+                    },
+                }
+            ]
+        }
+    )
+
+    assert tool_results[0]["status"] == "pending_approval"
+    assert tool_results[0]["metadata"]["approval_id"] == "approval-1"
+
+
 class TraceAgent:
     def execute_stream(self, query, session_id, request_id, tenant_id, **kwargs):
         trace_recorder.start_trace(request_id, session_id)

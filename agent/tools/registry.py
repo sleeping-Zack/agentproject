@@ -130,6 +130,60 @@ def build_default_tool_registry(allowed_tools: Iterable[str]) -> ToolRegistry:
     )
     registry.register(
         ToolSpec(
+            name="lookup_error_code",
+            description="按设备型号和故障码精确查询诊断与安全处理步骤",
+            scope="device_diagnostics:read",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string"},
+                    "error_code": {"type": "string"},
+                },
+                "required": ["model", "error_code"],
+                "additionalProperties": False,
+            },
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="get_product_specs",
+            description="按设备型号精确查询结构化产品规格",
+            scope="product_catalog:read",
+            input_schema={
+                "type": "object",
+                "properties": {"model": {"type": "string"}},
+                "required": ["model"],
+                "additionalProperties": False,
+            },
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="create_support_ticket",
+            description="为已确认的设备问题创建售后工单",
+            scope="support_ticket:write",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string"},
+                    "issue_type": {
+                        "type": "string",
+                        "enum": ["repair", "maintenance", "warranty", "other"],
+                    },
+                    "description": {"type": "string"},
+                    "error_code": {"type": "string"},
+                },
+                "required": ["model", "issue_type", "description"],
+                "additionalProperties": False,
+            },
+            risk_level="high",
+            side_effect="write",
+            requires_approval=True,
+            timeout_seconds=10,
+        )
+    )
+    registry.register(
+        ToolSpec(
             name="fill_context_for_report",
             description="标记后续模型调用进入报告生成场景",
             scope="runtime:write",

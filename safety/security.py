@@ -18,7 +18,10 @@ INJECTION_PATTERNS = [
 
 RAG_INJECTION_PATTERNS = [
     re.compile(r"忽略.*(系统提示词|开发者指令|工具规则)", re.IGNORECASE),
-    re.compile(r"调用\s*(fetch_external_data|get_user_id)", re.IGNORECASE),
+    re.compile(
+        r"调用\s*(fetch_external_data|get_user_id|create_support_ticket)",
+        re.IGNORECASE,
+    ),
     re.compile(r"ignore .*system .*prompt", re.IGNORECASE),
 ]
 
@@ -29,9 +32,22 @@ TOOL_ARGUMENT_RULES = {
         "user_id": re.compile(r"^\d{4,20}$"),
         "month": re.compile(r"^\d{4}-\d{2}$"),
     },
+    "lookup_error_code": {
+        "model": re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9._+\-\s]{1,80}$"),
+        "error_code": re.compile(r"^[A-Za-z0-9._-]{1,32}$"),
+    },
+    "get_product_specs": {
+        "model": re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9._+\-\s]{1,80}$"),
+    },
+    "create_support_ticket": {
+        "model": re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9._+\-\s]{1,80}$"),
+        "issue_type": re.compile(r"^(repair|maintenance|warranty|other)$"),
+        "description": re.compile(r"^.{5,1000}$", re.DOTALL),
+        "error_code": re.compile(r"^(?:[A-Za-z0-9._-]{1,32})?$"),
+    },
 }
 
-SENSITIVE_TOOLS = {"fetch_external_data"}
+SENSITIVE_TOOLS = {"fetch_external_data", "create_support_ticket"}
 _approved_sensitive_tools: ContextVar[frozenset[str]] = ContextVar(
     "approved_sensitive_tools",
     default=frozenset(),

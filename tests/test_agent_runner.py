@@ -56,6 +56,24 @@ class ReportDataBackend:
         )
 
 
+class PendingApprovalBackend:
+    def __call__(self, task: AgentTask, state):
+        return AgentBackendResult(
+            answer="售后工单创建操作正在等待审批。",
+            approval_id="approval-ticket-1",
+            pending_approval_tool="create_support_ticket",
+            tool_results=[
+                {
+                    "tool": "create_support_ticket",
+                    "status": "pending_approval",
+                    "args": {"model": "S20"},
+                    "content": "pending_approval approval_id=approval-ticket-1",
+                    "metadata": {"approval_id": "approval-ticket-1"},
+                }
+            ],
+        )
+
+
 def _runner(tmp_path, max_steps=8, conversation_memory=None):
     return AgentRunner(
         backend=FakeBackend(),
@@ -99,6 +117,26 @@ def test_report_access_arguments_preserve_chinese_month_and_explicit_user():
     )
 
     assert args == {"user_id": "1008", "month": "2026-07"}
+
+
+def test_runner_propagates_backend_pending_approval(tmp_path):
+    runner = AgentRunner(
+        backend=PendingApprovalBackend(),
+        approval_store=SQLiteApprovalStore(str(tmp_path / "approvals.db")),
+        artifact_store=SQLiteArtifactStore(str(tmp_path / "artifacts.db")),
+    )
+
+    result = runner.run(
+        AgentTask(
+            query="为 S20 的 E12 故障创建售后工单",
+            request_id="req-ticket-pending",
+        )
+    )
+
+    assert result.state.status == "pending_approval"
+    assert result.approval_id == "approval-ticket-1"
+    assert result.state.tool_calls[-1].tool_name == "create_support_ticket"
+    assert result.state.tool_calls[-1].status == "pending_approval"
 
 
 def test_runner_completes_and_persists_final_answer(tmp_path):

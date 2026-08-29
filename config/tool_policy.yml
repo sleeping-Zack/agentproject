@@ -8,6 +8,25 @@ default:
   reason: no matching tool policy rule
 
 rules:
+  - id: support-ticket-create
+    priority: 350
+    match:
+      tenants: ["*"]
+      roles: [user, operator, admin]
+      scenes: ["*"]
+      tools: [create_support_ticket]
+      data_scopes: [support_ticket:write]
+      risk_levels: [high]
+      argument_constraints:
+        required: [model, issue_type, description]
+        fields:
+          issue_type:
+            one_of: [repair, maintenance, warranty, other]
+    action: allow
+    requires_approval: true
+    reason_code: support_ticket_requires_approval
+    reason: "tool requires approval: create_support_ticket"
+
   # Demonstrates a real tenant-specific entitlement: tenant-b purchases the
   # knowledge-only tier and cannot use environment/weather tools.
   - id: tenant-b-weather-disabled
@@ -85,12 +104,16 @@ rules:
         - get_user_id
         - get_current_month
         - fill_context_for_report
+        - lookup_error_code
+        - get_product_specs
       data_scopes:
         - knowledge:read
         - environment:read
         - user:read
         - time:read
         - runtime:write
+        - device_diagnostics:read
+        - product_catalog:read
       risk_levels: [low]
     action: allow
     reason_code: standard_tool_allowed

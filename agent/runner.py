@@ -74,6 +74,8 @@ class AgentBackendResult:
     safe_fallback_answer: str = ""
     safe_fallback_structured_answer: Optional[StructuredAnswer] = None
     safe_fallback_strategy: str = "verified_evidence_excerpt"
+    approval_id: Optional[str] = None
+    pending_approval_tool: str = ""
 
 
 def _public_citation_evidence(
@@ -223,6 +225,10 @@ def _merge_repair_result(
         safe_fallback_answer=previous.safe_fallback_answer,
         safe_fallback_structured_answer=previous.safe_fallback_structured_answer,
         safe_fallback_strategy=previous.safe_fallback_strategy,
+        approval_id=repaired.approval_id or previous.approval_id,
+        pending_approval_tool=(
+            repaired.pending_approval_tool or previous.pending_approval_tool
+        ),
     )
 
 
@@ -295,6 +301,25 @@ class ReactAgentBackend:
         evidence = self._extract_evidence(trace_payload)
         tokens_in, tokens_out, cost, cost_mode = self._extract_usage(trace_payload)
         tool_results = self._extract_tool_results(trace_payload)
+        pending_result = next(
+            (
+                item
+                for item in reversed(tool_results)
+                if str(item.get("status") or "") == "pending_approval"
+            ),
+            None,
+        )
+        pending_metadata = (
+            pending_result.get("metadata")
+            if isinstance(pending_result, dict)
+            else {}
+        ) or {}
+        approval_id = str(pending_metadata.get("approval_id") or "").strip() or None
+        pending_approval_tool = (
+            str(pending_result.get("tool") or "")
+            if isinstance(pending_result, dict)
+            else ""
+        )
         fallback_answer, fallback_structured, fallback_strategy = self._evidence_fallback(
             evidence,
             tool_results,
@@ -312,6 +337,8 @@ class ReactAgentBackend:
             safe_fallback_answer=fallback_answer,
             safe_fallback_structured_answer=fallback_structured,
             safe_fallback_strategy=fallback_strategy,
+            approval_id=approval_id,
+            pending_approval_tool=pending_approval_tool,
         )
 
     def repair(
@@ -399,7 +426,11 @@ class ReactAgentBackend:
             if event.get("category") != "tool":
                 continue
             metadata = dict(event.get("metadata") or {})
-            status = "error" if event.get("error") else "success"
+            status = (
+                "error"
+                if event.get("error")
+                else str(metadata.get("status") or "success")
+            )
             if event.get("name") == "rag_summarize":
                 rag_metadata = pending_rag_results.pop(0) if pending_rag_results else {}
                 metadata = {**rag_metadata, **metadata}
@@ -1309,8 +1340,44 @@ class AgentRunner:
                         ),
                         status=str(tool_result.get("status", "completed")),
                         result=str(tool_result.get("content", ""))[:500],
+                        approval_id=(
+                            str((tool_result.get("metadata") or {}).get("approval_id"))
+                            if (tool_result.get("metadata") or {}).get("approval_id")
+                            else None
+                        ),
+                        risk_level=(
+                            self.policy.tool_registry.get_spec(tool_name).risk_level
+                            if self.policy.tool_registry.get_spec(tool_name) is not None
+                            else "low"
+                        ),
                     ),
                     count_budget=False,
+                )
+
+            if backend_result.approval_id:
+                pending_tool = backend_result.pending_approval_tool or "sensitive_tool"
+                step.status = "pending_approval"
+                step.content = f"等待工具 {pending_tool} 的审批"
+                state.mark_pending_approval(backend_result.approval_id)
+                self._publish_event(
+                    task.request_id,
+                    "approval_required",
+                    {
+                        "tool": pending_tool,
+                        "approval_id": backend_result.approval_id,
+                    },
+                )
+                self._record_diagnostic(
+                    state,
+                    "approval",
+                    "pending",
+                    step_id=step.step_id,
+                    tool=pending_tool,
+                )
+                return self._result(
+                    state,
+                    "请求已暂停：等待需审批工具操作确认。",
+                    approval_id=backend_result.approval_id,
                 )
 
             usage_error = self._usage_overrun_reason(state)

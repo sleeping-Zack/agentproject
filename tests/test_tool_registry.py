@@ -55,3 +55,26 @@ def test_registry_rejects_duplicate_tool_names():
                 input_schema={"type": "object"},
             )
         )
+
+
+def test_new_domain_tools_export_risk_and_schema_metadata():
+    registry = build_default_tool_registry(
+        ["lookup_error_code", "get_product_specs", "create_support_ticket"]
+    )
+    manifest = {item["name"]: item for item in registry.as_mcp_manifest()["tools"]}
+
+    assert manifest["lookup_error_code"]["input_schema"]["required"] == [
+        "model",
+        "error_code",
+    ]
+    assert manifest["get_product_specs"]["scope"] == "product_catalog:read"
+    ticket = manifest["create_support_ticket"]
+    assert ticket["risk_level"] == "high"
+    assert ticket["side_effect"] == "write"
+    assert ticket["requires_approval"] is True
+    assert ticket["input_schema"]["properties"]["issue_type"]["enum"] == [
+        "repair",
+        "maintenance",
+        "warranty",
+        "other",
+    ]

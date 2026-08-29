@@ -137,6 +137,52 @@ def test_semantic_router_understands_an_implicit_cross_capability_task():
     assert captured["history"] == context.recent_messages
 
 
+def test_semantic_router_keeps_support_ticket_writes_on_react_path():
+    def classify(_query, _context):
+        return SemanticRouteProposal(
+            execution_mode="plan_execute",
+            goals=(
+                RoutingGoal(
+                    id="g1",
+                    description="查询 S20 的 E12 故障含义",
+                    required_tools=("lookup_error_code",),
+                ),
+                RoutingGoal(
+                    id="g2",
+                    description="创建售后工单",
+                    required_tools=("create_support_ticket",),
+                    depends_on=("g1",),
+                ),
+            ),
+            risk="high",
+            confidence=0.95,
+            reasons=("semantic_multiple_goals", "semantic_high_risk"),
+        )
+
+    router = TaskRouter(semantic_classifier=classify, semantic_enabled=True)
+    decision = router.route(
+        "查明 S20 的 E12 后创建售后工单",
+        context=RoutingContext(
+            available_tools=("lookup_error_code", "create_support_ticket"),
+            remaining_steps=8,
+            remaining_tool_calls=5,
+            remaining_tokens=12000,
+        ),
+    )
+
+    assert decision.execution_mode == "react"
+    assert "write_tool_forces_react" in decision.reasons
+
+
+def test_deterministic_router_keeps_support_ticket_writes_on_react_path():
+    decision = TaskRouter(semantic_enabled=False).route(
+        "先查明 S20 的 E12 故障，再创建售后工单"
+    )
+
+    assert decision.execution_mode == "react"
+    assert "write_tool_forces_react" in decision.reasons
+
+
 def test_semantic_classifier_parses_strict_json_and_accounts_for_its_model_call():
     manager = BudgetManager(max_tokens=4000, max_cost=1.0)
     response = SimpleNamespace(

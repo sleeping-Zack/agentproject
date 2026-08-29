@@ -29,9 +29,7 @@ from agent.planner import (
 )
 from agent.policies import PlanValidator, Replanner
 from agent.summarizer import ConversationSummarizer
-from agent.tools.agent_tools import (fetch_external_data, fill_context_for_report,
-                                     get_current_month, get_user_id, get_user_location,
-                                     get_weather, rag, rag_summarize, tool_data_service)
+from agent.tools.agent_tools import REACT_TOOLS, rag, tool_data_service
 from agent.tools.middleware import (
     enforce_model_budget,
     log_before_model,
@@ -143,8 +141,7 @@ class ReactAgent:
         self.agent = create_agent(
             model=chat_model,
             system_prompt=system_prompt,
-            tools=[rag_summarize, get_weather, get_user_location, get_user_id,
-                   get_current_month, fetch_external_data, fill_context_for_report],
+            tools=REACT_TOOLS,
             middleware=[
                 monitor_tool,
                 enforce_model_budget,
@@ -434,7 +431,8 @@ class ReactAgent:
         self._ensure_trace(request_id, session_id)
         with bind_request_context(request_id=request_id, tenant_id=tenant_id,
                                   session_id=session_id, user_id=user_id,
-                                  data_user_id=data_user_id):
+                                  data_user_id=data_user_id,
+                                  approval_id=approval_id):
             try:
                 assert_safe_user_input(query)
             except UnsafeInputError as exc:
@@ -493,6 +491,7 @@ class ReactAgent:
             tenant_id=tenant_id,
             user_id=user_id,
             data_user_id=data_user_id,
+            approval_id=approval_id,
         ):
             try:
                 assert_safe_user_input(query)

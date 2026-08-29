@@ -392,3 +392,42 @@ rules: []
             build_default_tool_registry(["get_weather"]),
             config_path=config_path,
         )
+
+
+def test_policy_allows_catalog_reads_and_requires_ticket_approval():
+    policy = ToolPolicy(
+        build_default_tool_registry(
+            ["lookup_error_code", "get_product_specs", "create_support_ticket"]
+        )
+    )
+
+    specs = policy.decide(
+        tenant_id="tenant-a",
+        user_role="user",
+        scene="support",
+        tool_name="get_product_specs",
+        args={"model": "S20"},
+    )
+    error = policy.decide(
+        tenant_id="tenant-a",
+        user_role="user",
+        scene="support",
+        tool_name="lookup_error_code",
+        args={"model": "S20", "error_code": "E12"},
+    )
+    ticket = policy.decide(
+        tenant_id="tenant-a",
+        user_role="user",
+        scene="support",
+        tool_name="create_support_ticket",
+        args={
+            "model": "S20",
+            "issue_type": "repair",
+            "description": "设备持续显示 E12，重装水箱后仍未恢复。",
+            "error_code": "E12",
+        },
+    )
+
+    assert specs.action == PolicyAction.ALLOW
+    assert error.action == PolicyAction.ALLOW
+    assert ticket.action == PolicyAction.NEED_APPROVAL

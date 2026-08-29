@@ -1,8 +1,9 @@
 collection_name: agent
-corpus_version: v1         # 语料内容变更时递增，用于语义缓存失效
+corpus_version: v2         # 语料内容变更时递增，用于语义缓存失效
 persist_directory: storage/chroma
 k: 3
 data_path: data
+knowledge_source_manifest: data/knowledge_sources.yml
 md5_hex_store: storage/md5.text
 allow_knowledge_file_type: ["txt", "pdf"]
 chunk_version: v2

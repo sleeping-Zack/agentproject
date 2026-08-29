@@ -1,0 +1,77 @@
+# 官方产品、故障与售后资料索引
+
+核验日期：2026-08-28
+
+本文件只保存官方资料的事实型摘要和入口，不复制或重新发布厂商网页、说明书全文。保修、退换和联系方式会因型号、购买渠道、国家或地区变化；回答售后问题时必须同时确认型号、购买地区、购买渠道和购买日期，并以对应地区的最新官方页面为准。
+
+## Roborock / 石头
+
+官方支持中心：https://support.roborock.com/hc/en-us
+全球保修入口：https://global.roborock.com/pages/service-warranty
+
+T7S Plus 中国大陆说明书同时覆盖产品参数、错误 1-9、12-18、21-23、27-28、常见问题和中国大陆三包。法规型号为 A23*0RR，电池典型容量 5200mAh；说明书明确该产品及其售后条款只适用于中国大陆，不能套用到港澳台、海外或其他石头型号。
+说明书：https://files.roborock.com/uploadImages/images/upload/File/%E7%9F%B3%E5%A4%B4%E6%89%AB%E6%8B%96%E6%9C%BA%E5%99%A8%E4%BA%BAT7S%20Plus%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E%E4%B9%A6.pdf
+
+S8 MaxV Ultra 的官方资料显示：最大吸力 10000Pa，电池典型容量 5200mAh，机身尘盒 270mL，机身水箱 100mL。西班牙和墨西哥官方页面列出 180 分钟续航，其中西班牙页面明确是静音模式，回答时必须保留该测试模式。导航/避障组合为 PreciSense LiDAR 与 Reactive AI 2.0（3D 结构光和 RGB 摄像头）。
+产品页：https://us.roborock.com/pages/roborock-s8-maxv-ultra
+参数对比：https://support.roborock.com/hc/en-us/articles/33954114436761-What-is-the-difference-among-of-S8-Pro-Ultra-S8-Max-Ultra-and-S8-MaxV-Ultra
+续航（墨西哥）：https://mx.roborock.com/pages/robot-vacuum-cleaner
+续航模式（西班牙）：https://es.roborock.com/products/reacondicionado-90-como-nuevo-roborock-s8-maxv-ultra-robot-aspirador-y-fregasuelos-con-estacion-rockdock%C2%AE-ultra-8-en-1-copy
+
+## iRobot
+
+新系列说明书目录：https://homesupport.irobot.com/articles/en_US/Knowledge/845
+主流系列说明书目录：https://homesupport.irobot.com/articles/en_US/Knowledge/843
+历史系列说明书目录：https://homesupport.irobot.com/articles/en_US/Knowledge/844
+全系列充电错误表：https://homesupport.irobot.com/articles/en_US/Knowledge/19598
+Roomba 800 系列运行错误表：https://homesupport.irobot.com/articles/en_US/Knowledge/7265
+有限保修：https://homesupport.irobot.com/articles/en_US/Knowledge/3096
+联系 Customer Care：https://homesupport.irobot.com/articles/en_US/Knowledge/200
+
+上述三个说明书目录合计覆盖 400-900、e、i、j、s、Essential、Combo 10 Max，以及 100/1000、200/2000、Plus 400/500、Max 700 等新旧系列。Roomba j7 有官方简体中文说明书。故障记录必须绑定系列：相同数字在不同系列可能代表不同问题。
+j7 简中说明书：https://prod-help-content.care.irobotapi.com/files/j_series/og/robot_only_CHINA.pdf
+
+Roomba 105 Combo 的官方商品页只提供相对于 Roomba 600 系列的吸力宣传，没有 Pa 数值，因此不能换算或编造 suction_pa。可核验参数包括 3000mAh LFP 电池和 ClearView LiDAR；该机支持吸尘、拖地、吸拖三种模式。
+产品页：https://www.irobot.com/en_US/roomba-105-combo-robot/Y314020.html
+
+## ECOVACS / 科沃斯
+
+全球说明书目录：https://help.ecovacs.com/global/support/instruction-manual
+中国大陆报修入口：https://www.ecovacs.com/cn/support/repair
+X2 OMNI 繁中 FAQ：https://help.ecovacs.com/hk/support/deebot-x2-omni-black
+
+官方说明书目录覆盖 DEEBOT X、T、N 等系列。新款产品的故障信息常以语音提示、App 提示或症状出现，不应强行映射成 E01/E02。官方旧款说明书中的 E01-E10 只适用于 CR130、CR131、CEN620、CEN130、CEN640，禁止套用到 X2、T30 或 N20。
+旧款故障码说明书：https://static.ecovacs.cn/upload/servicecenter/2015/06/20150603085103800.pdf
+
+DEEBOT N20 PRO 澳洲官方规格页显示：最大吸力 8000Pa，5200mAh 锂电池，工作时间 170-300 分钟，尘盒 400mL，TrueMapping 导航和红外避障。300 分钟是官方标称上限，回答时应保留这一条件。
+产品页：https://www.ecovacs.com/au/shop/deebot-robotic-vacuum-cleaner/deebot-n20-pro-white
+
+## Dreame / 追觅
+
+全球说明书目录：https://global.dreametech.com/pages/user-manuals-and-faqs/1000
+机器人排障中心：https://support.dreametech.com/hc/en-us/sections/10376680416783-Robot-Vacuums
+中国大陆售后：https://www.dreame.tech/help/afterService
+全球售后入口：https://global.dreametech.com/pages/after-sales-policy
+
+全球目录覆盖 X、L、D 系列。现代产品通常使用语音提示、App 提示和症状排障，查询时应保存原始提示文本，而不是只保存数字错误码。
+
+X40 Ultra 官方产品页显示：最大吸力 12000Pa、6400mAh 电池、机身尘盒 300mL、机身水箱 80mL，障碍识别为 AI RGB 摄像头与 3D 结构光。12000Pa 是 Dreame Lab 条件下的最大值，实际表现会随使用环境变化。
+产品页：https://global.dreametech.com/products/x40-ultra
+说明书页：https://global.dreametech.com/pages/x40-ultra-x40-ultra-complete-user-manual
+
+## 售后问诊统一字段
+
+转售后前至少收集：品牌、完整营销型号、机身或基站内部型号、序列号、购买国家或地区、购买渠道、购买或交付日期、购买凭证、故障原始提示、复现步骤，以及能说明问题的照片、视频或 App 截图。不要把一个地区的保修年限回答成全球统一规则。
+
+T7S Plus 中国大陆说明书给出的型号专属三包为：主机（含内置电池）、充电座和电源线 2 年，水箱和震动拖布支架 1 年，随机耗材不在保修期内。该规则仅限 T7S Plus 中国大陆版本。其他品牌或型号应跳转到各自地区的最新官方售后页核验。
+
+涉及进液、烧焦气味、电源线破损、电池异常发热或鼓包时，应停止使用并断开电源，避免自行拆机，联系品牌官方售后。日常清洁刷组、轮组、传感器或充电触点前，先关机或断开充电座电源，并遵循对应型号说明书。
+
+## 版权与使用边界
+
+这些资料公开可访问，但不是开放许可知识库。项目只保存事实型结构化字段、改写后的短摘要和官方链接，不自动抓取全站，也不随仓库分发整本说明书。商业全文入库前应完成授权或条款审查。
+
+Roborock 用户协议：https://global.roborock.com/pages/user-agreement
+iRobot 网站条款：https://www.irobot.com/en_US/legal/terms-and-conditions.html
+ECOVACS 使用条款：https://www.ecovacs.com/us/terms-of-use
+Dreame 使用条款：https://global.dreametech.com/pages/terms-conditions

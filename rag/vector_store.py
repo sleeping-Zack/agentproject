@@ -6,7 +6,11 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from utils.path_tool import get_abs_path
 from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type, get_file_md5_hex
 from utils.logger_handler import logger
-from rag.rag_utils import build_document_metadata, markdown_section_title
+from rag.rag_utils import (
+    build_document_metadata,
+    load_knowledge_source_metadata,
+    markdown_section_title,
+)
 from rag.retrievers.bm25_retriever import BM25Retriever
 import os
 import threading
@@ -126,6 +130,11 @@ class VectorStoreService:
             get_abs_path(chroma_conf["data_path"]),
             tuple(chroma_conf["allow_knowledge_file_type"]),
         )
+        manifest_path = chroma_conf.get("knowledge_source_manifest")
+        official_metadata = load_knowledge_source_metadata(
+            get_abs_path(manifest_path) if manifest_path else "",
+            get_abs_path(chroma_conf["data_path"]),
+        ) if manifest_path else {}
 
         any_added = False
         for path in allowed_files_path:
@@ -152,6 +161,9 @@ class VectorStoreService:
                 base_metadata = build_document_metadata(
                     path,
                     chunk_version=chroma_conf.get("chunk_version", "v1"),
+                )
+                base_metadata.update(
+                    official_metadata.get(str(os.path.abspath(path)).casefold(), {})
                 )
                 current_section = None
                 for index, doc in enumerate(split_document):

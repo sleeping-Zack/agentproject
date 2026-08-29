@@ -1,0 +1,40 @@
+name: Deployed API performance gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  staging-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: performance
+    env:
+      PERFORMANCE_TARGET_URL: ${{ vars.PERFORMANCE_TARGET_URL }}
+      PERFORMANCE_API_KEY: ${{ secrets.PERFORMANCE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install benchmark dependencies
+        run: pip install -e .
+      - name: Validate performance environment
+        run: >-
+          python -c "import os,sys;
+          sys.exit(0 if os.getenv('PERFORMANCE_TARGET_URL')
+          and os.getenv('PERFORMANCE_API_KEY') else 2)"
+      - name: Run deployed streaming API gate
+        run: >-
+          python -m scripts.benchmark_api
+          --config config/api_performance_gates.yml
+          --profile staging
+          --gate
+          --report reports/api-performance.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: api-performance-report
+          path: reports/api-performance.json

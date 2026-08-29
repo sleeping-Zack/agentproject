@@ -10,6 +10,7 @@ Tracked metrics:
     - agent_request_latency_ms_bucket        histogram
     - agent_tool_call_total{tool,status}     counter
     - agent_tool_latency_ms_bucket           histogram
+    - agent_model_latency_ms_bucket          histogram
     - agent_rag_eval_score{metric}           gauge (set by eval pipeline)
     - agent_tokens_total{kind}               counter
 """
@@ -97,6 +98,15 @@ class MetricsRegistry:
     def observe_tool_latency(self, tool: str, ms: float) -> None:
         self.observe_histogram("agent_tool_latency_ms", ms, {"tool": tool})
 
+    def observe_model_latency(
+        self, provider: str, scene: str, status: str, ms: float
+    ) -> None:
+        self.observe_histogram(
+            "agent_model_latency_ms",
+            ms,
+            {"provider": provider, "scene": scene, "status": status},
+        )
+
     def set_rag_score(self, metric: str, value: float) -> None:
         self.set_gauge("agent_rag_eval_score", value, {"metric": metric})
 
@@ -114,7 +124,10 @@ class MetricsRegistry:
                 "histograms": {self._format_labels(name, labels): {
                     "sum": hist.sum,
                     "count": hist.total,
-                    "buckets": list(zip(hist.buckets, hist.counts)),
+                    "buckets": [
+                        ("+Inf" if upper == float("inf") else upper, count)
+                        for upper, count in zip(hist.buckets, hist.counts)
+                    ],
                 } for (name, labels), hist in self._histograms.items()},
             }
 

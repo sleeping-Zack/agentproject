@@ -1,0 +1,21 @@
+schema_version: 1
+policy_version: api-performance-gates-v1
+
+# This gate targets a deployed streaming API. It is intentionally not part of PR CI.
+profiles:
+  staging:
+    workload:
+      requests: 100
+      concurrency: 10
+      timeout_seconds: 60
+      warmup_requests: 5
+    thresholds:
+      minimum_success_count: 95
+      minimum_qps: 1.0
+      maximum_ttft_p95_ms: 3000
+      maximum_response_p95_ms: 15000
+      maximum_response_p99_ms: 30000
+      maximum_model_stage_p95_ms: 12800
+      maximum_tool_stage_p95_ms: 3200
+      maximum_timeout_rate: 0.01
+      maximum_failure_rate: 0.02

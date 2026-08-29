@@ -30,12 +30,15 @@ storage/chroma/
 storage/md5.text
 storage/*.db
 data/*.db
+# 厂商手册仅允许作为本地、已获授权的检索缓存，不随仓库分发
+data/vendor_manuals/
 storage/*.pkl
 storage/*_report.json
 md5.text
 /tmp_answer.txt
 /tmp_response.json
 /reports/
+/output/
 /outputs/
 /storage/experiments/
 

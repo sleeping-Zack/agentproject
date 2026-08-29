@@ -193,6 +193,9 @@ class ToolPolicy:
                 "get_current_month",
                 "fetch_external_data",
                 "fill_context_for_report",
+                "lookup_error_code",
+                "get_product_specs",
+                "create_support_ticket",
             ]
         )
         self.audit_sink = audit_sink

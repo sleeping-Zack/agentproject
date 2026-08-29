@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from agent.policies import PolicyAction, ToolPolicy
 from agent.tools.registry import build_default_tool_registry
+from observability.context import bind_request_context
 from safety.auth import AuthContext
 from safety.security import sensitive_tool_approval
 from services.approval_store import ApprovalStore
@@ -52,6 +53,8 @@ class MCPToolServer:
         arguments = params.get("arguments", {})
         if name not in self.tool_handlers:
             raise ValueError(f"Unknown tool: {name}")
+        spec = self.registry.get_spec(name)
+        requires_approval = bool(spec and spec.requires_approval)
         if self.policy is not None:
             scene = params.get("scene") or arguments.get("scene")
             if scene is None and name == "fetch_external_data":
@@ -79,14 +82,26 @@ class MCPToolServer:
                     "content": [{"type": "text", "text": "工具参数包含敏感字段，已拒绝执行。"}],
                 }
             if decision.action == PolicyAction.NEED_APPROVAL:
-                approved = self._resolve_approval(params, context, name, arguments)
-                if approved is not True:
-                    return approved
-        if name == "fetch_external_data":
-            with sensitive_tool_approval(name):
+                requires_approval = True
+        if requires_approval:
+            approved = self._resolve_approval(params, context, name, arguments)
+            if approved is not True:
+                return approved
+
+        with bind_request_context(
+            request_id=str(params.get("request_id") or uuid4()),
+            session_id="mcp",
+            tenant_id=context.tenant_id,
+            user_id=context.principal_id,
+            data_user_id=context.data_user_id,
+            user_role=context.user_role,
+            approval_id=str(params.get("approval_id") or ""),
+        ):
+            if requires_approval:
+                with sensitive_tool_approval(name):
+                    result = self.tool_handlers[name](arguments)
+            else:
                 result = self.tool_handlers[name](arguments)
-        else:
-            result = self.tool_handlers[name](arguments)
         return {"content": [{"type": "text", "text": str(result)}]}
 
     def _resolve_approval(
@@ -118,7 +133,11 @@ class MCPToolServer:
                     "content": [{"type": "text", "text": "审批记录不属于当前用户。"}],
                 }
             if approval.is_approved:
-                if approval.args != arguments:
+                if not self._approval_arguments_match(
+                    tool_name,
+                    approval.args,
+                    arguments,
+                ):
                     return {
                         "status": "denied",
                         "approval_id": approval_id,
@@ -153,6 +172,25 @@ class MCPToolServer:
             "approval_id": approval.approval_id,
             "content": [{"type": "text", "text": "等待敏感工具调用审批。"}],
         }
+
+    @staticmethod
+    def _approval_arguments_match(
+        tool_name: str,
+        approved: Dict,
+        current: Dict,
+    ) -> bool:
+        if tool_name != "create_support_ticket":
+            return approved == current
+
+        def normalize(arguments: Dict) -> Dict:
+            return {
+                "model": str(arguments.get("model") or "").strip().upper(),
+                "issue_type": str(arguments.get("issue_type") or "").strip().lower(),
+                "description": str(arguments.get("description") or "").strip(),
+                "error_code": str(arguments.get("error_code") or "").strip().upper(),
+            }
+
+        return normalize(approved) == normalize(current)
 
     @staticmethod
     def _error(request_id, code: int, message: str) -> Dict:

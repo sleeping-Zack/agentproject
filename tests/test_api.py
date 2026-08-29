@@ -24,7 +24,23 @@ def test_tool_manifest_endpoint_exports_allowed_tools():
     assert response.status_code == 200
     manifest = response.json()
     assert manifest["protocol"] == "mcp"
-    assert any(tool["name"] == "rag_summarize" for tool in manifest["tools"])
+    expected = {
+        "rag_summarize",
+        "lookup_error_code",
+        "get_product_specs",
+        "create_support_ticket",
+    }
+    assert expected <= {tool["name"] for tool in manifest["tools"]}
+
+    mcp_response = client.post(
+        "/mcp",
+        headers={"X-API-Key": "dev-api-key", "X-Tenant-ID": "api-test"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert mcp_response.status_code == 200
+    assert expected <= {
+        tool["name"] for tool in mcp_response.json()["result"]["tools"]
+    }
 
 
 def test_harness_run_returns_citation_evidence_contract(monkeypatch):

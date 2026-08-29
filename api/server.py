@@ -23,8 +23,11 @@ from agent.runner import (
     ReactAgentBackend,
 )
 from agent.tools.agent_tools import (
+    create_support_ticket,
     fetch_external_data,
+    get_product_specs,
     get_weather,
+    lookup_error_code,
     rag_summarize,
     tool_registry,
 )
@@ -132,6 +135,20 @@ mcp_server = MCPToolServer(
         "get_weather": lambda args: get_weather.invoke({"city": args["city"]}),
         "fetch_external_data": lambda args: fetch_external_data.invoke(
             {"user_id": args["user_id"], "month": args["month"]}
+        ),
+        "lookup_error_code": lambda args: lookup_error_code.invoke(
+            {"model": args["model"], "error_code": args["error_code"]}
+        ),
+        "get_product_specs": lambda args: get_product_specs.invoke(
+            {"model": args["model"]}
+        ),
+        "create_support_ticket": lambda args: create_support_ticket.invoke(
+            {
+                "model": args["model"],
+                "issue_type": args["issue_type"],
+                "description": args["description"],
+                "error_code": args.get("error_code", ""),
+            }
         ),
     },
     policy=harness_runner.policy,

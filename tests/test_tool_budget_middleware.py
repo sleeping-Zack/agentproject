@@ -6,14 +6,19 @@ from agent.tools.retry import RetryPolicy
 from langchain_core.messages import ToolMessage
 
 from agent.tools.middleware import (
+    _approval_arguments_match,
     _authorize_rag_call,
     _enforce_tool_budget,
+    _enforce_tool_policy,
+    _is_tool_cacheable,
     _record_rag_outcome,
     _run_with_timeout,
     _tool_result_event_payload,
     monitor_tool,
 )
 from observability.context import bind_request_context, request_context
+from observability.tracing import trace_recorder
+from services.approval_store import SQLiteApprovalStore
 
 
 def test_tool_budget_blocks_before_handler_invocation():
@@ -205,6 +210,66 @@ def test_rag_guard_does_not_limit_other_tools():
     assert _authorize_rag_call(
         runtime_context, "get_weather", {"city": "北京"}, "call-2"
     ) is None
+
+
+def test_only_read_tools_use_the_generic_tool_cache():
+    assert _is_tool_cacheable("get_weather") is True
+    assert _is_tool_cacheable("get_product_specs") is True
+    assert _is_tool_cacheable("create_support_ticket") is False
+    assert _is_tool_cacheable("fill_context_for_report") is False
+
+
+def test_ticket_approval_treats_missing_optional_error_code_as_empty():
+    approved = {
+        "model": "s20",
+        "issue_type": "repair",
+        "description": "  水箱故障  ",
+    }
+    resumed = {
+        "model": "S20",
+        "issue_type": "repair",
+        "description": "水箱故障",
+        "error_code": "",
+    }
+
+    assert _approval_arguments_match(
+        "create_support_ticket", approved, resumed
+    ) is True
+
+
+def test_ticket_policy_records_pending_approval_in_tool_trace(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        middleware_module,
+        "approval_store",
+        SQLiteApprovalStore(str(tmp_path / "approvals.db")),
+    )
+    request_id = "ticket-policy-pending-trace"
+    trace_recorder.start_trace(request_id, "session-ticket")
+
+    result = _enforce_tool_policy(
+        tool_name="create_support_ticket",
+        tool_args={
+            "model": "S20",
+            "issue_type": "repair",
+            "description": "水箱故障，需要创建售后工单",
+        },
+        tool_call_id="tool-call-ticket",
+        request_id=request_id,
+        tenant_id="tenant-a",
+        principal_id="user-a",
+        data_user_id=None,
+        user_role="user",
+        scene="default",
+        approval_id=None,
+    )
+
+    assert result is not None
+    assert "pending_approval" in result.content
+    events = trace_recorder.export_trace(request_id)["events"]
+    pending = next(event for event in events if event.get("category") == "tool")
+    assert pending["name"] == "create_support_ticket"
+    assert pending["metadata"]["status"] == "pending_approval"
+    assert pending["metadata"]["approval_id"]
 
 
 def test_rag_guard_stops_after_empty_business_result():

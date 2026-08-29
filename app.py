@@ -117,6 +117,9 @@ TOOL_LABELS = {
     "get_current_month": "时间服务",
     "fetch_external_data": "客户数据服务",
     "fill_context_for_report": "报告上下文服务",
+    "lookup_error_code": "设备故障码服务",
+    "get_product_specs": "产品规格目录",
+    "create_support_ticket": "售后工单服务",
 }
 
 QUICK_PROMPTS = (
@@ -1341,7 +1344,7 @@ def _process_chat_request(
             "prompt": prompt,
             "session_id": st.session_state.session_id,
         }
-        st.warning("该请求涉及受保护数据，正在等待授权审批。")
+        st.warning("该请求涉及受保护数据或有副作用的操作，正在等待授权审批。")
     elif terminal_payload.get("status") == "completed":
         st.session_state.pending_approval_request = {}
     st.session_state.chat_messages.append(
@@ -1589,13 +1592,13 @@ def _render_operations(client: AgentApiClient) -> None:
     _page_heading(
         "Governance",
         "审批与服务产物",
-        "处理受保护数据访问审批，并查询服务过程中生成的报告、证据和结构化产物。",
+        "处理受保护数据访问与有副作用操作的审批，并查询服务过程中生成的报告、证据和结构化产物。",
     )
-    approval_tab, artifact_tab = st.tabs(["访问审批", "服务产物"])
+    approval_tab, artifact_tab = st.tabs(["操作审批", "服务产物"])
 
     with approval_tab:
         if st.session_state.user_role in {"operator", "admin"}:
-            st.caption("这里只展示当前租户的待审批数据访问请求。审批身份来自登录凭证。")
+            st.caption("这里只展示当前租户的待审批访问或操作请求。审批身份来自登录凭证。")
             try:
                 pending_approvals = client.list_approvals(status="pending")
             except AgentApiError as exc:
@@ -1606,17 +1609,17 @@ def _render_operations(client: AgentApiClient) -> None:
             for approval in pending_approvals:
                 approval_id = str(approval.get("approval_id") or "")
                 args = approval.get("args") or {}
+                tool_name = str(approval.get("tool_name") or "")
+                tool_label = TOOL_LABELS.get(tool_name, tool_name or "服务操作")
                 with st.container(border=True):
-                    st.markdown(f"#### 数据访问申请 · `{approval_id[:8]}`")
+                    st.markdown(f"#### 审批申请 · `{approval_id[:8]}`")
                     st.caption(
                         f"申请人 {approval.get('principal_id') or '历史记录'}"
-                        f" · 工具 {approval.get('tool_name')}"
+                        f" · 操作 {tool_label}"
                         f" · 创建于 {approval.get('created_at')}"
                     )
-                    st.write(
-                        f"申请范围：用户 {args.get('user_id', '未知')}，"
-                        f"月份 {args.get('month', '未知')}"
-                    )
+                    st.caption("申请参数")
+                    st.json(args, expanded=False)
                     approve_column, deny_column = st.columns(2)
                     if approve_column.button(
                         "批准",
@@ -1651,7 +1654,7 @@ def _render_operations(client: AgentApiClient) -> None:
         else:
             approval_id = str(st.session_state.approval_id or "")
             if not approval_id:
-                st.info("当前账号没有待处理的数据访问申请。本人单月使用报告无需审批。")
+                st.info("当前账号没有待处理的审批申请。")
             else:
                 try:
                     approval = client.approval(approval_id)
@@ -1688,7 +1691,7 @@ def _render_operations(client: AgentApiClient) -> None:
                         if status == "pending":
                             st.info("请由 operator/admin 使用其独立凭证进入本页审批。")
                         elif status == "denied":
-                            st.warning("该数据访问请求已被拒绝，不能继续执行。")
+                            st.warning("该审批请求已被拒绝，不能继续执行。")
 
     with artifact_tab:
         with st.container(border=True):

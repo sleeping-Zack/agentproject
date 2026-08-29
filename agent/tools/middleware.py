@@ -53,6 +53,31 @@ TOOL_BREAKER_RECOVERY_TIMEOUT = float(agent_conf.get("tool_breaker_recovery_time
 TOOL_RESULT_PREVIEW_CHARS = 4000
 
 
+def _is_tool_cacheable(tool_name: str) -> bool:
+    """Cache only side-effect-free, non-sensitive reads."""
+    spec = tool_registry.get_spec(tool_name)
+    return bool(
+        spec is not None
+        and spec.side_effect == "read"
+        and tool_name != "rag_summarize"
+    )
+
+
+def _approval_arguments_match(tool_name: str, approved: dict, current: dict) -> bool:
+    if tool_name != "create_support_ticket":
+        return approved == current
+
+    def normalize(arguments: dict) -> dict:
+        return {
+            "model": str(arguments.get("model") or "").strip().upper(),
+            "issue_type": str(arguments.get("issue_type") or "").strip().lower(),
+            "description": str(arguments.get("description") or "").strip(),
+            "error_code": str(arguments.get("error_code") or "").strip().upper(),
+        }
+
+    return normalize(approved) == normalize(current)
+
+
 def _tool_result_event_payload(result: ToolMessage | Command) -> dict:
     """Return a bounded, redacted tool result suitable for the audit event stream."""
     content = getattr(result, "content", None)
@@ -233,11 +258,10 @@ def monitor_tool(
 
     # 幂等缓存：相同 tool+args 在 TTL 窗口内复用上次结果，跳过实际调用
     cache_args = request.tool_call.get("args", {})
-    # RAG already has a structured semantic cache that retains evidence.  The
-    # generic ToolMessage cache stores only rendered text and would sever the
-    # evidence lineage on a cache hit.
-    cached = None if tool_name == "rag_summarize" else tool_call_cache.get(
-        tool_name, cache_args
+    cached = (
+        tool_call_cache.get(tool_name, cache_args)
+        if _is_tool_cacheable(tool_name)
+        else None
     )
     if cached is not None:
         metrics_registry.inc_tool_call(tool_name, status="cache_hit")
@@ -280,8 +304,8 @@ def monitor_tool(
                 **_tool_result_event_payload(result),
             },
         )
-        # 只缓存成功的 ToolMessage；Command 类型有副作用不缓存
-        if isinstance(result, ToolMessage) and tool_name != "rag_summarize":
+        # Only plain read tools are cacheable; writes and runtime mutations are not.
+        if isinstance(result, ToolMessage) and _is_tool_cacheable(tool_name):
             tool_call_cache.set(tool_name, cache_args, result)
 
         if tool_name == "fill_context_for_report":
@@ -623,7 +647,7 @@ def _enforce_tool_policy(
                 tool_call_id=tool_call_id,
                 name=tool_name,
             )
-        if approval.args != tool_args:
+        if not _approval_arguments_match(tool_name, approval.args, tool_args):
             return ToolMessage(
                 content="敏感工具审批记录与当前调用参数不匹配，已拒绝执行。",
                 tool_call_id=tool_call_id,
@@ -637,8 +661,16 @@ def _enforce_tool_policy(
                 tool_call_id=tool_call_id,
                 name=tool_name,
             )
+        pending_content = f"pending_approval approval_id={approval.approval_id}"
+        _record_pending_approval_trace(
+            request_id,
+            tool_name,
+            decision.redacted_args,
+            approval.approval_id,
+            pending_content,
+        )
         return ToolMessage(
-            content=f"pending_approval approval_id={approval.approval_id}",
+            content=pending_content,
             tool_call_id=tool_call_id,
             name=tool_name,
         )
@@ -659,8 +691,16 @@ def _enforce_tool_policy(
             "approval_required",
             {"tool": tool_name, "approval_id": approval.approval_id},
         )
+        pending_content = f"pending_approval approval_id={approval.approval_id}"
+        _record_pending_approval_trace(
+            request_id,
+            tool_name,
+            decision.redacted_args,
+            approval.approval_id,
+            pending_content,
+        )
         return ToolMessage(
-            content=f"pending_approval approval_id={approval.approval_id}",
+            content=pending_content,
             tool_call_id=tool_call_id,
             name=tool_name,
         )
@@ -669,6 +709,34 @@ def _enforce_tool_policy(
         tool_call_id=tool_call_id,
         name=tool_name,
     )
+
+
+def _record_pending_approval_trace(
+    request_id: str | None,
+    tool_name: str,
+    redacted_args: dict,
+    approval_id: str,
+    content: str,
+) -> None:
+    if not request_id:
+        return
+    try:
+        with trace_recorder.span(
+            request_id,
+            category="tool",
+            name=tool_name,
+            metadata={
+                "status": "pending_approval",
+                "approval_id": approval_id,
+                "args_hash": args_hash(redacted_args),
+                "redacted_args": redacted_args,
+                "result": content,
+                "result_truncated": False,
+            },
+        ):
+            pass
+    except KeyError:
+        return
 
 
 def _publish_tool_event(
@@ -691,7 +759,8 @@ def _invoke_handler_with_approval(
     request: ToolCallRequest,
     handler: Callable[[ToolCallRequest], ToolMessage | Command],
 ) -> ToolMessage | Command:
-    if tool_name == "fetch_external_data":
+    spec = tool_registry.get_spec(tool_name)
+    if spec is not None and spec.requires_approval:
         with sensitive_tool_approval(tool_name):
             return handler(request)
     return handler(request)
